@@ -1,5 +1,7 @@
 # 教练模式 · Coach Mode
 
+这是一个由slimeball与deepseek v4.1flash以及deepseek v4.1flash1017共同开发的项目。
+
 > 让 AI 带你**自己动手**学会一个工具，而不是替你做完。
 
 「教练模式」是 **DeepSeek Harness** 的一个 agent preset（插件包）。装好后新建会话时，模式列表里会多出一个「教练模式」。
