@@ -1,0 +1,34 @@
+{
+  "name": "@local/coach-mode",
+  "version": "0.4.2",
+  "private": true,
+  "type": "module",
+  "description": "Coach Mode (教练模式) agent preset for DeepSeek Harness — tier 1 state machine + tier 2 research cache.",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "config.js",
+    "projection.js",
+    "guard.js",
+    "inject.js",
+    "core/*.js",
+    "tools/*.js",
+    "cordis.patch.yml",
+    "README.md",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "scripts": {
+    "test": "node --test --test-isolation=none"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
