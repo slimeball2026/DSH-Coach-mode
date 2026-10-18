@@ -149,7 +149,7 @@ coach-mode-bundle/          ← 插件本体（安装目标）
 SPEC-档2-教练模式.md         施工图：Q1–Q7 决策、状态机、各版本实现与验收
 coach-mode-档1-验收报告.md   档 1 的验收证据（会话 id + 事件 seq）
 
-prompt and work-document/      按阅读顺序编排的设计/交接文档（00–13）
+prompt and work-document/   按阅读顺序编排的设计/交接文档（00–13）
 _ref/                      验收与回放工具（冒烟、日志回放、会话转写、取证）
 _verify-20261018/          0.4.1 / 0.4.2 的验收结论（原始会话日志未入库）
 ```
