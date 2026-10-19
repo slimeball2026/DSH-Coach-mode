@@ -1,7 +1,7 @@
 ---
 生成时间: 2026/10/19 21:34:29
 会话主题: 教练模式Agent构想
-来源链接: https://chat.deepseek.com/a/chat/s/cbfea3f2-b8f5-4f57-8b53-5905202d84a5
+来源链接: https://chat.deepseek.com
 ---
 ---
 这是文件夹"prompt_and_work-document"中第02文档的提示词诞生过程，它来自deepseek网页端，而非deepseek harness。
