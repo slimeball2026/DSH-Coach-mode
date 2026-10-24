@@ -10,7 +10,11 @@
 
 ![demo](coach-mode-demo.gif)
 
-**开箱即用**-->去界面右侧**Release**寻找最新版本对应压缩包资源(assets里带版本号的压缩包)，随后按其中使用说明安装即可开始使用。
+**开箱即用**-->去界面右侧**Release**寻找最新版本对应压缩包资源(assets里带版本号的压缩包)，随后按其中使用说明安装。
+或复制以下链接，发送给DSH创造模式让它自己装。
+```
+https://github.com/slimeball2026/DSH-Coach-mode/tree/main/coach-mode-bundle
+```
 
 ---
 
