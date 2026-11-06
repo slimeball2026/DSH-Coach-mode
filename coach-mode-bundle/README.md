@@ -11,7 +11,14 @@
 档 1 只做三件事（`SPEC-档1最小切片.md` 第 1 节）：
 **状态机骨架**、**强制核查触发**、**合格标准进状态**。其余功能推迟到档 2。
 
-> **当前版本 0.4.2（2026-10-18）**：**成本控制**——检索按步设上限（默认 **3 次/步**，
+> **当前版本 0.4.3（2026-11-06）**：**截图软核查**——新增证据类型 `screen` 与核查种类 `screenshot`：
+> `coach_check(kind="screenshot", target="<进程名 / 窗口标题片段 / foreground / pid:1234>")`
+> 直接截用户屏幕上**那一个窗口**，PNG 存进 `ctx.attachments`、以图片块回给模型。
+> **默认关闭**（`screenshotEnabled`，截屏会把用户屏幕内容发给模型），同一步有张数上限。
+> 三条硬规则落在代码里：截图必须在用户这次反馈之后抓、最近一张必须成功、自截的图不能冒充
+> `user_artifact` 工质。`stateVersion` 升到 **10**；工具仍 **8** 个（截图是 `coach_check` 的一个 kind）。单测 **162**。**A16 待实机**。
+>
+> **0.4.2（2026-10-18）**：**成本控制**——检索按步设上限（默认 **3 次/步**，
 > 第 4 次直接拒绝、失败也计数）、状态块字符预算（默认 **4000**，超了按
 > 检索缓存 → 回退/跳过 → 历史证据 的顺序裁，**当前步骤/标准/结论永不裁**）、
 > 检索正文只截“存进状态”的那份（默认 **2000**），并新增 `【用量】` 一行。
@@ -94,7 +101,8 @@
 | `guard.js` | `write` / `edit` 的确定性拒绝 |
 | `core/` | **纯核心**：状态机、计划校验、判定规则、跳过、回退、暂停/恢复、检索脱敏/缓存、进度摘要、支撑等级、渲染、折叠。零宿主依赖、零 IO、零时间、零随机 |
 | `tools/*.js` | **8 个**教练工具 + `define-tool.js`（本地版 `defineTool`：把参数表编译成原始 JSON Schema） |
-| `test/` | 零依赖单测（149 个用例） |
+| `test/` | 零依赖单测（162 个用例） |
+| `_dev/` | **仅开发期用**：把抓屏脚本落成 `.ps1` / 按生产路径跑一遍抓屏的探针。不进 `package.json` 的 `files`，安装时不会被带上 |
 | `locale/*.json`、`icon.svg` | 插件卡片显示元数据 |
 
 ---
@@ -160,9 +168,9 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 
 | 工具 | 作用 | 拒绝条件（代码里的 if） |
 |---|---|---|
-| `coach_plan` | 写入板块与步骤（含合格标准与所需证据） | 计划已被接受后再调用（例外：安装分支里 `toolAvailable="yes"` 的受控早退）；`evidence` 为 `file`/`command` 却没给 `check`；步数超 `maxPlanSteps`；`PAUSED` 时拒绝 |
-| `coach_check` | 只读取证 | 阶段不对；`stepKey` 不是当前步骤；`kind=command` 不在白名单 |
-| `coach_verify` | 提交核查结论 | 见下面四条 |
+| `coach_plan` | 写入板块与步骤（含合格标准与所需证据） | 计划已被接受后再调用（例外：安装分支里 `toolAvailable="yes"` 的受控早退）；`evidence` 为 `file`/`command`/`screen` 却没给 `check`；`evidence` 与 `check.kind` 不配对；步数超 `maxPlanSteps`；`PAUSED` 时拒绝 |
+| `coach_check` | 只读取证 | 阶段不对；`stepKey` 不是当前步骤；`kind=command` 不在白名单；`kind=screenshot` 时 `screenshotEnabled` 未开 / 同一步超 `screenshotMaxPerStep` / 平台不是 Windows / `sameMachine:false` |
+| `coach_verify` | 提交核查结论 | 见下面六条 |
 | `coach_advance` | 进入下一步 | 上一步没有「通过」或「跳过」记录 |
 | `coach_skip` | 明确跳过 | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY`（物理前提不可跳过） |
 | `coach_research` | 联网检索并写检索缓存 | 阶段是 `COMPLETE` / 过渡态；宿主 `web` 服务不可用；`query` 为空 |
@@ -256,12 +264,56 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 > 预算按“行”裁，所以裁完的块可能明显小于预算（先把一整行换成短提示，再判断是否够了）。
 > 这是刻意的：宁可块小一点，也不要为了“刚好 4000”去截断【请执行】。
 
-**`coach_verify` 的四条硬前置条件：**
+**`coach_verify` 的六条硬前置条件：**
 
-1. `evidence` 为 `file` / `command` 且本步没有 `coach_check` 记录 → **直接失败**；
+1. `evidence` 为 `file` / `command` / `screen` 且本步没有 `coach_check` 记录 → **直接失败**；
 2. `evidence` 为 `none` 时只允许判「无法判断」；
 3. `evidence` 为 `user_artifact` 判「通过」却没给工质（`evidenceRef` 为空）→ 失败；
-4. 同一步的重复核查必须引用**新的** `coach_check` 证据（新证据序号必须大于上一条结论的序号）。
+4. 同一步的重复核查必须引用**新的** `coach_check` 证据（新证据序号必须大于上一条结论的序号）；
+5. `evidence` 为 `screen` 时，**最近一张截图必须成功**且**晚于用户这条反馈**，否则只能判「无法判断」
+   （`COACH_VERIFY_SCREEN_FAILED` / `COACH_VERIFY_SCREEN_STALE`）；
+6. `evidence` 为 `user_artifact` 时，`evidenceRef` 不能指向本会话自己抓的截图
+   （`COACH_VERIFY_SELF_EVIDENCE`）——那是插件的取证，不是用户的工质。
+
+### 截图软核查（v0.4.3）
+
+用户没发截图、而这一步又只能看界面时，插件可以**自己截那一个窗口**。它不是新工具，是
+`coach_check` 的第 5 个 `kind`——所以"工具目录稳定"（D6）和"先取证再判定"（5.2）两条原有约束都还在。
+
+**怎么用**
+
+1. 计划里把该步的 `evidence` 写成 `"screen"`，并给 `check: { kind: "screenshot", target: "blender" }`
+   （窗口在用户动手**之前**就定死，模型不能事后挑一个看起来做完了的窗口）；
+2. 用户反馈之后，模型调用
+   `coach_check({ kind: "screenshot", target: "blender" })`；
+3. 插件截那个窗口 → PNG 存进 `ctx.attachments` → 以 `{ type: "image", attachment }` 作为工具结果
+   回给模型（`read_image` 用的是同一条图片通道），同时写一条 `checks` 记录（含窗口标题、进程、pid、尺寸）。
+
+`target` 的写法：进程名（`blender`）、窗口标题片段、`foreground`（当前前台窗口）、`pid:1234`。
+匹配优先级是 进程名全等 → 进程名包含 → 标题包含。
+
+**三条硬规则（代码里，不是提示词）**
+
+| 规则 | 违反时的错误码 |
+|---|---|
+| 截图必须先有成功的取证；最近一张失败（窗口最小化 / 找不到窗口 / 纯色画面）不能判通过 | `COACH_VERIFY_SCREEN_FAILED` / `COACH_VERIFY_NO_SCREEN` |
+| 截图必须晚于用户这次反馈——用户动手之前的画面不算 | `COACH_VERIFY_SCREEN_STALE` |
+| 自己截的图不能填进 `user_artifact` 的 `evidenceRef`（v0.4.2 及以前的漏洞） | `COACH_VERIFY_SELF_EVIDENCE` |
+
+第二条是关键：**截图证明的是"屏幕现在长这样"，不是"用户做完了"**。所以判定仍然要用户先说话，
+截图只负责把"现在长这样"变成可核对的事实。
+
+**抓取实现**：`ctx.get('subprocess')` 起 `powershell -EncodedCommand`（UTF-16LE，避免引号与编码问题），
+脚本用 Win32 `EnumWindows` + `GetWindowRect` 找到窗口，`SetProcessDpiAwarenessContext(PER_MONITOR_V2)`
+避免 DPI 缩放截偏，`Graphics.CopyFromScreen` 只截**该窗口矩形**（不截整屏），最后按
+`screenshotMaxWidth/Height` 等比缩放并存 PNG。窗口最小化、纯色画面（黑屏/DRM/独占全屏）会**明确报失败**，
+不会把一张黑图当证据。
+
+**隐私**：`screenshotEnabled` 默认 **false**；打开后也只截**匹配到的那一个窗口**，且
+`screenshotBlockProcesses` / `screenshotBlockTitles` 默认把 DSH 自己和 Electron 挡在外面。
+截图会作为图片进入会话历史，**之后每一轮请求都会重发**，直到压缩——这是它比文字证据贵的地方。
+PNG 默认留在 `<工作目录>/.coach/shots/`（`screenshotKeepFiles: false` 可改成存完就删），
+用户随时能看到教练到底截了什么、也能直接删掉。
 
 ## 七、每轮状态块
 
@@ -271,6 +323,8 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 【当前阶段】【学习工具】【工具可用性】【可跑命令】【待补计划】【当前板块】【当前步骤】【请执行】【合格标准】
 【所需证据】【本步失败次数】【核查证据】【核查结论】【检索缓存】【位置关系】
 【环境核查】  ← 计划还没建立时做的外观检查（v2.2；记在 env 上，不推进状态）
+【可截图】  ← 只在截图核查打开且计划还没建立时出现：怎么用 coach_check(kind="screenshot")（v0.4.3）
+【截图取证】  ← 只在当前步 evidence=screen 时出现：target 就是计划里的窗口（v0.4.3）
 【用量】  ← 本步检索 X/N、本会话检索 M、本步核查 K 次（v0.4.2）
 【安装分支】  ← 只在安装分支出现
 【安装分支·可早退】  ← 只在安装分支出现：工具其实可用时怎么一步退出（v0.3.3）
@@ -365,6 +419,26 @@ case "break":     return <br>                // 只有硬换行才换行
 | `maxResearchPerStep` | `3` | 同一步最多检索几次；第 N+1 次直接拒绝（`COACH_RESEARCH_BUDGET`），**失败也计数**。换到下一步额度重置 |
 | `maxStateBlockChars` | `4000` | 状态块字符预算；超了按【检索缓存】→【回退记录】/【跳过提醒】→【核查证据】→【环境核查】/【可跑命令】/【位置关系】的顺序换成短提示或删除；**当前步骤/【请执行】/【合格标准】/【核查结论】/错误提示永不裁** |
 | `researchContentMaxChars` | `2000` | **只截存进状态**的检索正文；工具当次回传给模型的文本不受影响 |
+| `screenshotEnabled` | `false` | 截图核查总开关。**只有显式写 `true` 才开**（截屏会把用户屏幕上那个窗口发给模型）；关着时状态块不显示【可截图】，`coach_check(kind="screenshot")` 直接拒绝 |
+| `screenshotMaxPerStep` | `2` | 同一步最多截图几张；第 N+1 张在抓屏**之前**就拒绝（`COACH_CHECK_SHOT_BUDGET`），失败也计数，换步重置 |
+| `screenshotMaxWidth` | `1600` | 截图宽度上限（像素），超过等比缩放 |
+| `screenshotMaxHeight` | `1000` | 截图高度上限（像素） |
+| `screenshotTimeoutMs` | `20000` | 抓屏脚本超时 |
+| `screenshotMaxBytes` | `8388608` | 读回 PNG 的字节上限 |
+| `screenshotBlockProcesses` | `deepseek harness` / `electron` / `dsh` | 永不作为截图目标的进程名（小写）。**写这个字段会整体替换默认值** |
+| `screenshotBlockTitles` | `deepseek harness` | 永不作为截图目标的窗口标题片段（小写）；进程名读不到时的兜底。同样整体替换 |
+| `screenshotKeepFiles` | `true` | `true` 时把截图 PNG 留在工作区 `.coach/shots/`（附件里另有一份，用户可查可删），`false` 存完就删 |
+
+例：打开截图核查，并让两张截图都保留在工作区：
+
+```yaml
+          - id: coach-engine
+            name: '@local/coach-mode'
+            config:
+              screenshotEnabled: true
+              screenshotKeepFiles: true
+              screenshotMaxPerStep: 3
+```
 
 例：在默认白名单之外，再允许 `git branch --show-current` 这一条命令核查：
 
@@ -397,6 +471,8 @@ node --test --test-isolation=none
 >    会以 `EPERM` 失败。`--test-isolation=none` 在同一进程里跑完全部文件，不需要提权。
 
 覆盖：`machine.test.js`（11 状态全部转移 + 安装分支恢复原始目标 + 受控早退与旧证据清理）、
+`screenshot.test.js`（v0.4.3 截图软核查：计划配对、必须先截图、必须晚于用户反馈、
+最近一张失败不放行、自截不得冒充 user_artifact、`shot` 折叠、状态块文案、配置默认值与非法回落）、
 `back.test.js`（v0.3.4 回退：目标解析、只能往回、旧证据/结论/跳过失效、重核后恢复推进、A11）、
 `pause.test.js`（v0.4.0 暂停/恢复：PAUSED 拒其它工具、证据不作废、安装分支/INIT 暂停、备注截断）、
 `summary.test.js`（v0.4.0 进度摘要：完成/跳过/剩余、回退失效、COMPLETE、失败与检索计数）、
@@ -473,6 +549,25 @@ node <本仓库路径>\_ref\smoke-coach.mjs
     反过来，如果【请执行】+【合格标准】本身就超过预算，块会**超预算**——这是刻意的优先级。
 19. **检索预算按“步”而不是按“会话”。** 同一会话里换到下一步，额度就重置；
     用户明确要求放宽时，只能改 `maxResearchPerStep`，模型没有绕过入口。
+20. **截图核查默认关闭，而且只支持 Windows。** 抓屏走 GDI + Win32 窗口枚举；macOS / Linux 上
+    `coach_check(kind="screenshot")` 会直接拒绝（`COACH_CHECK_SHOT_PLATFORM`）。`sameMachine:false`
+    时也拒绝——远端部署截到的是服务器桌面，不是用户的屏幕。
+21. **截图只证明“屏幕现在长这样”，不证明“用户做完了”。** v0.4.3 只落了两道闸
+    （必须晚于用户这次反馈、最近一张必须成功），**没有做基线对比**（步开始时抓一张、结束时比像素差）——
+    那要多一倍图片成本，留给下一版。所以【合格标准】仍要写成“界面上能看见 X”，
+    不要写成“你点了 X”。
+22. **这些情况抓不到（不是 bug）：** 窗口最小化、独占全屏、DRM 保护、GPU 黑屏、被 UAC 安全桌面盖住。
+    失败会明说原因（`window_minimized` / `blank_image` / `no_window` + 候选窗口列表），
+    模型应当让用户把窗口恢复出来再抓，而不是拿失败结果或旧图判通过。
+23. **截图脚本走 `ctx.subprocess`，不受 `pwsh` 工具的沙箱护栏约束。** 和本节第 1 条是同一个已知口子：
+    它只在“选哪个窗口”上受限（进程名 / 标题黑名单），不在文件系统与网络访问上受限。
+    这是默认关闭的另一个理由。
+24. **图片会随历史重复计费。** 一张 1600×1000 的图约 1–2k 视觉 token，进入会话后每一轮请求都会重发，
+    直到压缩；当前 profile 里 `image-offload` 未启用、`tool-result-pruner` 只裁文本。
+    所以默认 `screenshotMaxPerStep: 2` 且默认缩到 1600×1000。
+25. **`stateVersion` 升到 10。** 旧会话的缓存状态会作废并重折一次（只是重算，不丢日志）；
+    `checks` 条目新增可选 `shot`，状态新增 `lastUserFeedbackAt`。装回 0.4.2 不会崩，
+    但 0.4.3 写下的截图记录会被当成未知字段忽略。
 
 ## 十一、改哪里
 
@@ -488,6 +583,9 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 | 状态块文案 / 字符预算与裁剪顺序 | `core/render.js`（`BUDGET_STUBS`） |
 | 检索脱敏 / 缓存字段 / 按步预算 / 正文截断 | `core/research.js` |
 | 检索工具 / 宿主 web 调用 | `tools/coach-research.js` |
+| 截图取证：窗口选择规则 / 抓屏脚本 / 附件保存 | `tools/coach-check.js`（`captureScript` / `observeScreenshot`） |
+| 截图的判定规则（必须在反馈之后、最近一张必须成功、自截不得冒充工质） | `core/verify.js` |
+| 截图的配置项与默认值 | `config.js`（`CONFIG_DEFAULTS`） |
 | 工具的参数与描述 | `tools/*.js` |
 
 > **改 `cordis.patch.yml` 的两条纪律**

@@ -79,19 +79,25 @@ export function bumpCurrentStepFailure(state) {
  *
  * 只在核查点确实在等反馈的阶段计入；首次计入时把 `pendingNoInfoAt` 设为该条消息的序号，
  * 随后同一步上的 `coach_verify` 失败会"认领"这一次，不再重复加（一轮算一次）。
+ *
+ * v0.4.3：无论阶段如何，都会把 `lastUserFeedbackAt` 更新成这条消息的序号——
+ * `screen` 证据判「通过」要用它确认「截图是用户这次反馈之后抓的」。
  * @param {object} state 当前状态。
  * @param {string} text 用户回复。
  * @param {number} at 该条消息的事件序号。
  * @returns {object} 新状态（未计入时原样返回）。
  */
 export function applyUserFeedback(state, text, at) {
-  if (!COUNTING_PHASES.includes(state.phase)) return state
-  if (currentStep(state) === undefined) return state
+  const stamped = typeof at === 'number' && state.lastUserFeedbackAt !== at
+    ? { ...state, lastUserFeedbackAt: at }
+    : state
+  if (!COUNTING_PHASES.includes(stamped.phase)) return stamped
+  if (currentStep(stamped) === undefined) return stamped
   if (!isNoInfoFeedback(text)) {
     // 有信息的反馈：清掉待认领标记，避免和后面的判定串在一起。
-    return state.pendingNoInfoAt === null ? state : { ...state, pendingNoInfoAt: null }
+    return stamped.pendingNoInfoAt === null ? stamped : { ...stamped, pendingNoInfoAt: null }
   }
-  const bumped = bumpCurrentStepFailure(state)
+  const bumped = bumpCurrentStepFailure(stamped)
   return { ...bumped, pendingNoInfoAt: typeof at === 'number' ? at : null }
 }
 

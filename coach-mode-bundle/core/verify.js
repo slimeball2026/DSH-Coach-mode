@@ -33,6 +33,49 @@ export const ENV_PROBE_KEY = 'env'
 export const ENV_PROBE_PHASES = ['INIT', 'CHECK_TOOL_AVAILABILITY']
 
 /**
+ * 归一化一条截图元数据（v0.4.3）。
+ *
+ * 纯函数：只做类型收敛，不做 IO，也不读时间。`shot` 会原样进 `checks` 条目，
+ * 折叠时从 `presentationMeta` 走同一条路，所以字段一旦定下就不要轻易改名。
+ * @param {unknown} raw 来自 `coach_check` 的截图事实。
+ * @returns {object|null}
+ */
+export function normalizeShot(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const text = (value, limit) => (typeof value === 'string' ? value.slice(0, limit) : '')
+  const id = text(raw.id, 80)
+  if (id === '') return null
+  const dimension = (value) => (Number.isInteger(value) && value > 0 ? value : 0)
+  return {
+    id,
+    path: text(raw.path, 400),
+    width: dimension(raw.width),
+    height: dimension(raw.height),
+    window: text(raw.window, 200),
+    process: text(raw.process, 120),
+    pid: Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : null,
+  }
+}
+
+/** 证据引用是否指向本会话自己抓的某张截图（v0.4.3：堵"自截冒充用户工质"）。 */
+function refersToSelfShot(evidenceRef, checks) {
+  const needle = String(evidenceRef ?? '').trim().toLowerCase().replace(/\\/g, '/')
+  if (needle === '') return false
+  for (const check of checks) {
+    const shot = check?.shot
+    if (shot === undefined || shot === null) continue
+    const id = String(shot.id ?? '').toLowerCase()
+    const path = String(shot.path ?? '').toLowerCase().replace(/\\/g, '/')
+    const name = path === '' ? '' : path.slice(path.lastIndexOf('/') + 1)
+    if (id !== '' && needle.includes(id)) return true
+    if (path !== '' && (needle === path || needle.includes(path))) return true
+    if (name !== '' && needle.includes(name)) return true
+  }
+  return false
+}
+
+
+/**
  * 记录一次只读核查（`coach_check`）。
  *
  * 两种情形：
@@ -74,6 +117,7 @@ export function applyCheck(state, observation, at) {
         target,
         ok: ok === true,
         detail: typeof detail === 'string' ? detail : String(detail ?? ''),
+        shot: normalizeShot(observation.shot),
         at,
       }],
     }
@@ -100,6 +144,7 @@ export function applyCheck(state, observation, at) {
       target,
       ok: ok === true,
       detail: typeof detail === 'string' ? detail : String(detail ?? ''),
+      shot: normalizeShot(observation.shot),
       at,
     }],
   }
@@ -164,6 +209,47 @@ export function applyVerify(state, input, at) {
         + '写出用户提供的工质（截图引用、文件路径或报错原文）。没有工质只能判「无法判断」。',
       'COACH_VERIFY_NO_ARTIFACT',
     )
+  }
+
+  // ── v0.4.3：自截的截图不能冒充「用户提供的工质」 ─────────────────────────
+  if (verdict === '通过' && evidence === 'user_artifact' && evidenceRef !== ''
+    && refersToSelfShot(evidenceRef, state.checks ?? [])) {
+    throw new CoachError(
+      '这个 evidenceRef 指向的是教练自己抓的截图，不是用户提供的工质。'
+        + '要按界面判定，请把该步的 evidence 设成 "screen" 并用 coach_check(kind="screenshot") 取证；'
+        + 'user_artifact 只能填用户给的截图 / 文件 / 报错原文。',
+      'COACH_VERIFY_SELF_EVIDENCE',
+    )
+  }
+
+  // ── v0.4.3：screen 证据 = 最新一张截图必须成功，且必须晚于用户这次反馈 ────
+  if (verdict === '通过' && evidence === 'screen') {
+    const shots = checks.filter((check) => check.kind === 'screenshot')
+    const latest = shots[shots.length - 1]
+    if (latest === undefined) {
+      throw new CoachError(
+        '本步的【所需证据】是「界面截图」，但还没有任何截图取证。'
+          + '先调用 coach_check({ kind: "screenshot", target: "<进程名 / 窗口标题片段 / foreground>" })，'
+          + '拿到截图之后再 coach_verify。',
+        'COACH_VERIFY_NO_SCREEN',
+      )
+    }
+    if (latest.ok !== true) {
+      throw new CoachError(
+        '最近一次截图取证失败了（窗口最小化 / 找不到目标窗口 / 抓取被拒绝）。'
+          + '失败的截图不能当证据：先按失败原因处理（让用户把窗口恢复出来，或换一个窗口名），'
+          + '再重新 coach_check(kind="screenshot")。',
+        'COACH_VERIFY_SCREEN_FAILED',
+      )
+    }
+    const lastUser = state.lastUserFeedbackAt
+    if (typeof lastUser !== 'number' || typeof latest.at !== 'number' || latest.at <= lastUser) {
+      throw new CoachError(
+        '这张截图不是用户这次反馈之后抓的，不能用来判「通过」。'
+          + '用户说了做完之后再截一次（coach_check(kind="screenshot")），然后重新 coach_verify。',
+        'COACH_VERIFY_SCREEN_STALE',
+      )
+    }
   }
 
   // ── 第 6 节：同一步的重复核查必须引用新的 coach_check 证据 ───────────────

@@ -43,6 +43,9 @@ export function registerStateBlock(ctx, deps) {
         // v0.4.2 成本控制：预算与上限都由 Config 给，渲染层不写死。
         maxResearchPerStep: config.maxResearchPerStep,
         maxStateBlockChars: config.maxStateBlockChars,
+        // v0.4.3 截图取证：关闭时不显示【可截图】，模型不会去试。
+        screenshotEnabled: config.screenshotEnabled,
+        screenshotMaxPerStep: config.screenshotMaxPerStep,
       })
     },
   }), 'coach-mode.systemPrompt.context()')

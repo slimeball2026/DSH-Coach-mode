@@ -12,8 +12,10 @@ import { applyVerify } from '../core/verify.js'
 const DESCRIPTION = [
   '提交一步的核查结论：通过 / 不通过 / 无法判断。',
   '判定只能依据状态块里的【合格标准】【所需证据】和已采集的【核查证据】。',
-  'evidence 为 file / command 的步骤必须先 coach_check 拿到证据，否则本工具直接失败；',
-  'evidence 为 none 的步骤只能判「无法判断」；evidence 为 user_artifact 时判「通过」必须给出工质（evidenceRef）。',
+  'evidence 为 file / command / screen 的步骤必须先 coach_check 拿到证据，否则本工具直接失败；',
+  'evidence 为 screen 时：最近一张截图必须成功，而且必须是在用户这次反馈之后抓的，否则不能判「通过」；',
+  'evidence 为 none 的步骤只能判「无法判断」；evidence 为 user_artifact 时判「通过」必须给出工质（evidenceRef），'
+    + '且不能用插件自己抓的截图冒充。',
   '同一步重复核查必须引用新的 coach_check 证据，不能凭记忆重复判。',
 ].join('')
 

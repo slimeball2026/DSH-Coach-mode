@@ -71,7 +71,7 @@ test('11 个状态齐全，过渡态与驻留态划分正确', () => {
   assert.deepEqual(TRANSITIONAL_PHASES, ['PLAN', 'NEXT_STEP', 'RESEARCH'])
   assert.equal(RESIDENT_PHASES.length, 8)
   assert.equal(initialState().phase, 'INIT')
-  assert.equal(initialState().stateVersion, 9, 'v0.4.2 的折叠语义版本是 9（research.stepKey + 正文截断）')
+  assert.equal(initialState().stateVersion, 10, 'v0.4.3 的折叠语义版本是 10（screen 证据 + 截图 meta + lastUserFeedbackAt）')
   assert.deepEqual(initialState().backs, [])
   assert.deepEqual(initialState().pauses, [])
   assert.deepEqual(initialState().research, [])

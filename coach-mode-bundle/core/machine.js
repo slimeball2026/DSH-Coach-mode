@@ -22,8 +22,10 @@
  * 折叠语义变了，升到 8。
  * v0.4.2：`research` 条目新增 `stepKey`（预算按步分账），正文按
  * `researchContentMaxChars` 截断；折叠结果变了，升到 9。
+ * v0.4.3：新增 `screen` 证据与 `screenshot` 核查种类，`checks` 条目可带 `shot`；
+ * 状态新增 `lastUserFeedbackAt`（截图必须晚于用户这次反馈才算数），升到 10。
  */
-export const STATE_VERSION = 9
+export const STATE_VERSION = 10
 
 /** 11 个阶段的中文名（渲染与报错共用一个来源）。 */
 export const PHASE_LABELS = {
@@ -53,19 +55,20 @@ export const TRANSITIONAL_PHASES = ['PLAN', 'NEXT_STEP', 'RESEARCH']
 /** 驻留态：会在两次请求之间停留，因此必须有可读的状态块。 */
 export const RESIDENT_PHASES = PHASES.filter((phase) => !TRANSITIONAL_PHASES.includes(phase))
 
-/** 合格标准所需的证据类型（SPEC 第 5.1 节）。 */
-export const EVIDENCES = ['file', 'command', 'user_artifact', 'none']
+/** 合格标准所需的证据类型（SPEC 第 5.1 节；v0.4.3 加 `screen`）。 */
+export const EVIDENCES = ['file', 'command', 'screen', 'user_artifact', 'none']
 
 /** 证据类型的中文说明（注入状态块用）。 */
 export const EVIDENCE_LABELS = {
   file: '文件（必须由 coach_check 读取核对）',
   command: '只读命令（必须由 coach_check 执行核对）',
+  screen: '界面截图（必须由 coach_check 截图核对；必须在用户这次反馈之后抓）',
   user_artifact: '用户提供的截图 / 文件 / 报错原文',
   none: '无法核查（只能判「无法判断」）',
 }
 
 /** 需要插件自己取证的证据类型。 */
-export const EVIDENCE_NEEDS_CHECK = ['file', 'command']
+export const EVIDENCE_NEEDS_CHECK = ['file', 'command', 'screen']
 
 /** 核查结论。 */
 export const VERDICTS = ['通过', '不通过', '无法判断']
@@ -79,8 +82,8 @@ export const DIFFICULTIES = ['低', '中', '高']
 /** 目标模式：学习 / 安装。 */
 export const GOAL_MODES = ['learn', 'install']
 
-/** `coach_check` 允许的只读核查种类（SPEC 第 5.3 节）。 */
-export const CHECK_KINDS = ['path_exists', 'list_dir', 'read_file', 'command']
+/** `coach_check` 允许的只读核查种类（SPEC 第 5.3 节；v0.4.3 加 `screenshot`）。 */
+export const CHECK_KINDS = ['path_exists', 'list_dir', 'read_file', 'command', 'screenshot']
 
 /** 教练工具名（折叠时只认这八个）。 */
 export const COACH_TOOLS = [
@@ -136,6 +139,9 @@ export function initialState() {
     // v2.2：最近一条「用户零信息反馈」的序号；供同一步上的 coach_verify 失败"认领"，
     // 保证一轮无效反馈只计一次（F2 口径）。null = 没有待认领的。
     pendingNoInfoAt: null,
+    // v0.4.3：最近一条真人用户消息的序号。`screen` 证据判「通过」时，
+    // 截图必须晚于它——防止拿一张用户动手之前拍的旧截图当证据。
+    lastUserFeedbackAt: null,
   }
 }
 

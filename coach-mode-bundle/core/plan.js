@@ -161,13 +161,33 @@ function normalizeStep(step, sectionIndex, stepIndex) {
   const rawCheck = step?.check
   if (rawCheck !== undefined && rawCheck !== null) {
     const kind = oneOf(rawCheck.kind, CHECK_KINDS, `${where}.check.kind`, '核查种类')
-    const target = requiredText(rawCheck.target, `${where}.check.target`, '核查目标（路径或命令）')
+    const target = requiredText(rawCheck.target, `${where}.check.target`, '核查目标（路径 / 命令 / 窗口）')
     check = { kind, target }
   } else if (EVIDENCE_NEEDS_CHECK.includes(evidence)) {
     throw new CoachError(
       `${where}（${goal}）的所需证据是 ${evidence}，必须给出 check（kind + target），`
-        + `否则插件无法取证、只能判「无法判断」。`,
+        + `否则插件无法取证、只能判「无法判断」。`
+        + (evidence === 'screen'
+          ? '界面截图请写 check: { kind: "screenshot", target: "<进程名 / 窗口标题片段 / foreground>" }。'
+          : ''),
       'COACH_PLAN_NO_CHECK',
+    )
+  }
+
+  // v0.4.3：证据类型与核查种类必须配对——否则模型可以声明「界面截图」却去读一个文件，
+  // 或者用截图冒充 file / command 的证据。
+  if (check !== null && evidence === 'screen' && check.kind !== 'screenshot') {
+    throw new CoachError(
+      `${where}（${goal}）的所需证据是 screen，但 check.kind 是 ${check.kind}。`
+        + '界面的步骤必须用 check.kind = "screenshot"，不能用文件或命令冒充。',
+      'COACH_PLAN_CHECK_MISMATCH',
+    )
+  }
+  if (check !== null && evidence !== 'screen' && check.kind === 'screenshot') {
+    throw new CoachError(
+      `${where}（${goal}）用了 check.kind = "screenshot"，但所需证据是 ${evidence}。`
+        + '要截图就把 evidence 改成 "screen"；要读文件 / 跑命令就写对应的 check。',
+      'COACH_PLAN_CHECK_MISMATCH',
     )
   }
 

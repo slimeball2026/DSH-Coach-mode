@@ -1,6 +1,6 @@
 {
   "name": "@local/coach-mode",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "Coach Mode (教练模式) agent preset for DeepSeek Harness — tier 1 state machine + tier 2 research cache.",

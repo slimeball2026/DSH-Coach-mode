@@ -132,6 +132,17 @@ function checkSummary(state, stepKey) {
     return '尚未采集（需要核查时先调用 coach_check）'
   }
   const shown = checks.slice(-3).map((check) => {
+    if (check.kind === 'screenshot') {
+      const shot = check.shot ?? null
+      const window = (shot?.window !== undefined && shot.window !== '') ? shot.window : check.target
+      const size = shot !== null && shot.width > 0 && shot.height > 0
+        ? ` ${shot.width}×${shot.height}`
+        : ''
+      const outcome = check.ok === true ? '已存证' : '失败'
+      const detail = clip(check.detail ?? '', DETAIL_BUDGET)
+      return `截图「${clip(window ?? '', DETAIL_BUDGET)}」${size} → ${outcome}`
+        + `${detail === '' ? '' : `（${detail}）`}`
+    }
     const outcome = check.ok === true ? '成功' : '未通过'
     const detail = clip(check.detail ?? '', DETAIL_BUDGET)
     return `${check.kind} ${clip(check.target ?? '', DETAIL_BUDGET)} → ${outcome}${detail === '' ? '' : `（${detail}）`}`
@@ -261,6 +272,14 @@ export function renderStateBlock(state, facts = {}) {
       lines.push(`【可跑命令】${allowCommands.join(' / ')}`
         + '（可直接用 coach_check(kind="command") 跑，不必先让用户手动跑）')
     }
+    // v0.4.3：截图取证是可选能力，开着就提前说清楚怎么用。
+    if (facts.screenshotEnabled === true) {
+      const maxShots = Number.isInteger(facts.screenshotMaxPerStep) && facts.screenshotMaxPerStep > 0
+        ? facts.screenshotMaxPerStep
+        : 2
+      lines.push(`【可截图】可以用 coach_check(kind="screenshot", target="<进程名 / 窗口标题片段 / foreground>") `
+        + `自己截一屏（同一步最多 ${maxShots} 张，结果存进附件、用户也能看到）。`)
+    }
   }
 
   if (state.phase === 'PAUSED') {
@@ -325,6 +344,12 @@ export function renderStateBlock(state, facts = {}) {
   lines.push(`【请执行】${step.action}`)
   lines.push(`【合格标准】${step.standard}`)
   lines.push(`【所需证据】${EVIDENCE_LABELS[step.evidence] ?? step.evidence}`)
+  if (step.evidence === 'screen') {
+    const window = step.check?.target ?? '<窗口>'
+    lines.push(`【截图取证】这一步只看界面：用户反馈之后用 `
+      + `coach_check(kind="screenshot", target="${window}") 抓一屏；`
+      + '抓失败会明确报失败，不要拿旧截图或失败结果判「通过」。')
+  }
   lines.push(`【本步失败次数】${failedAttempts}`)
   // v0.4.2：用量与预算。数字由状态算，模型不能改；超预算时这一行不裁。
   lines.push(usageLine(state, facts))

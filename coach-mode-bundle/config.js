@@ -42,12 +42,37 @@ export const CONFIG_DEFAULTS = {
   maxStateBlockChars: 4000,
   /** 存进状态的检索正文上限；不影响工具单次回传给模型的文本。 */
   researchContentMaxChars: 2000,
+  // v0.4.3 截图取证（SPEC §15）：默认关闭——截屏会把用户屏幕上的一切发给模型。
+  /** 总开关：false 时 coach_check(kind="screenshot") 直接拒绝，状态块也不显示【可截图】。 */
+  screenshotEnabled: false,
+  /** 同一步最多截图几张（第 N+1 张直接拒绝，失败也计数）。 */
+  screenshotMaxPerStep: 2,
+  /** 截图宽度上限（像素），超过会等比缩放——一张 1080p 图约 1.7k 视觉 token。 */
+  screenshotMaxWidth: 1600,
+  /** 截图高度上限（像素）。 */
+  screenshotMaxHeight: 1000,
+  /** 截图脚本超时。 */
+  screenshotTimeoutMs: 20000,
+  /** 读回 PNG 的字节上限。 */
+  screenshotMaxBytes: 8388608,
+  /** 永不作为截图目标的进程名（小写、去 .exe）——默认把自己和 Electron 挡掉。 */
+  screenshotBlockProcesses: ['deepseek harness', 'electron', 'dsh'],
+  /** 永不作为截图目标的窗口标题片段（小写）——进程名读不到时的兜底。 */
+  screenshotBlockTitles: ['deepseek harness'],
+  /** true 时把截图 PNG 留在工作区 `.coach/shots/`（附件里另有一份），false 时存完就删。 */
+  screenshotKeepFiles: true,
 }
 
 /** 取正整数，非法就用默认值。 */
 function naturalOf(value, fallback) {
   const number = Number(value)
   return Number.isInteger(number) && number > 0 ? number : fallback
+}
+
+/** 字符串数组：去空白、去空项；非数组回落默认值。 */
+function stringListOf(value, fallback) {
+  if (!Array.isArray(value)) return [...fallback]
+  return value.map((entry) => String(entry).trim()).filter((entry) => entry !== '')
 }
 
 /**
@@ -59,9 +84,7 @@ export function resolveCoachConfig(config) {
   const raw = config !== null && typeof config === 'object' ? config : {}
 
   // 显式写 [] 仍然表示"关闭命令核查"；只有缺字段/非数组才回落默认白名单。
-  const allowCommands = Array.isArray(raw.allowCommands)
-    ? raw.allowCommands.map((entry) => String(entry).trim()).filter((entry) => entry !== '')
-    : [...DEFAULT_ALLOW_COMMANDS]
+  const allowCommands = stringListOf(raw.allowCommands, DEFAULT_ALLOW_COMMANDS)
 
   return {
     failureThreshold: naturalOf(raw.failureThreshold, CONFIG_DEFAULTS.failureThreshold),
@@ -77,5 +100,23 @@ export function resolveCoachConfig(config) {
       raw.researchContentMaxChars,
       CONFIG_DEFAULTS.researchContentMaxChars,
     ),
+    // v0.4.3：只有显式写 true 才开——截屏是「把用户屏幕发给模型」，不能靠默认值兜。
+    screenshotEnabled: raw.screenshotEnabled === true,
+    screenshotMaxPerStep: naturalOf(raw.screenshotMaxPerStep, CONFIG_DEFAULTS.screenshotMaxPerStep),
+    screenshotMaxWidth: naturalOf(raw.screenshotMaxWidth, CONFIG_DEFAULTS.screenshotMaxWidth),
+    screenshotMaxHeight: naturalOf(raw.screenshotMaxHeight, CONFIG_DEFAULTS.screenshotMaxHeight),
+    screenshotTimeoutMs: naturalOf(raw.screenshotTimeoutMs, CONFIG_DEFAULTS.screenshotTimeoutMs),
+    screenshotMaxBytes: naturalOf(raw.screenshotMaxBytes, CONFIG_DEFAULTS.screenshotMaxBytes),
+    screenshotBlockProcesses: stringListOf(
+      raw.screenshotBlockProcesses,
+      CONFIG_DEFAULTS.screenshotBlockProcesses,
+    ).map((entry) => entry.toLowerCase()),
+    screenshotBlockTitles: stringListOf(
+      raw.screenshotBlockTitles,
+      CONFIG_DEFAULTS.screenshotBlockTitles,
+    ).map((entry) => entry.toLowerCase()),
+    screenshotKeepFiles: raw.screenshotKeepFiles === undefined
+      ? CONFIG_DEFAULTS.screenshotKeepFiles
+      : raw.screenshotKeepFiles === true,
   }
 }
