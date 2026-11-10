@@ -131,6 +131,13 @@ function psLiteral(value) {
  * 选择规则：`foreground` / `pid:1234` / 进程名或窗口标题的**子串**；
  * 被 `screenshotBlockProcesses` 命中的进程（默认含 DSH 自己与 Electron）永远不选。
  * 只截这一个窗口的矩形，不做整屏截图。
+ *
+ * v0.4.4 抓取顺序（见 SPEC §15）：
+ * 1. `PrintWindow(PW_RENDERFULLCONTENT)` —— 让目标窗口自己渲染，**不受遮挡影响**；
+ * 2. 失败或纯色 → 检测 9 个采样点是否被别的进程盖住；
+ * 3. 被盖住 → 直接报 `occluded` 失败，**绝不回退到屏幕像素**（那会截到遮挡物当证据）；
+ * 4. 没被盖住 → 回退 `CopyFromScreen`（GPU 直绘窗口只有这条能拿到画面）。
+ * 窗口尺寸改用 DWM 扩展边框，去掉 GetWindowRect 里那圈不可见的阴影边距。
  * @param {object} options 参数。
  * @returns {string} PowerShell 脚本文本。
  */
@@ -165,12 +172,38 @@ public static class CoachShot {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out RECT rect, int size);
   [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
   public static void EnableDpiAwareness() {
     try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) { return; } } catch { }
     try { SetProcessDPIAware(); } catch { }
+  }
+  // Visible frame bounds: excludes the invisible DWM resize/shadow margin that
+  // GetWindowRect includes (measured: 7px left/right/bottom on Windows 10).
+  public static bool TryGetFrame(IntPtr hWnd, out RECT rect) {
+    rect = new RECT();
+    int hr = DwmGetWindowAttribute(hWnd, 9, out rect, Marshal.SizeOf(typeof(RECT)));
+    if (hr == 0 && rect.Right > rect.Left && rect.Bottom > rect.Top) return true;
+    return GetWindowRect(hWnd, out rect);
+  }
+  // Which process owns the window visible at this screen point? Returns -1 if none.
+  // GA_ROOT = 2, so a child control resolves to its top-level window.
+  public static int OwnerPidAt(int x, int y) {
+    POINT p = new POINT();
+    p.X = x; p.Y = y;
+    IntPtr hit = WindowFromPoint(p);
+    if (hit == IntPtr.Zero) return -1;
+    IntPtr root = GetAncestor(hit, 2);
+    if (root == IntPtr.Zero) root = hit;
+    uint pid;
+    GetWindowThreadProcessId(root, out pid);
+    return (int)pid;
   }
 }
 '@
@@ -271,7 +304,7 @@ public static class CoachShot {
   }
 
   $rect = New-Object CoachShot+RECT
-  if (-not [CoachShot]::GetWindowRect($pick.hwnd, [ref]$rect)) {
+  if (-not [CoachShot]::TryGetFrame($pick.hwnd, [ref]$rect)) {
     Write-Result @{ ok = $false; error = 'no_rect'; title = $pick.title; process = $pick.process; pid = $pick.pid }
     exit 0
   }
@@ -282,26 +315,84 @@ public static class CoachShot {
     exit 0
   }
 
-  $bitmap = New-Object System.Drawing.Bitmap $width, $height
-  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size $width, $height))
-  $graphics.Dispose()
+  # ---- v0.4.4: capture the WINDOW, not the screen pixels under its rectangle ----
+  # CopyFromScreen (v0.4.3) returns whatever is painted at those coordinates, so any
+  # window stacked on top silently becomes the "evidence". PrintWindow asks the target
+  # window to render itself into our bitmap, so occlusion no longer matters.
+  function Test-FlatBitmap($bmp) {
+    $seen = @{}
+    $stepX = [Math]::Max(1, [int]($bmp.Width / 16))
+    $stepY = [Math]::Max(1, [int]($bmp.Height / 16))
+    for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
+      for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
+        $seen[$bmp.GetPixel($x, $y).ToArgb()] = $true
+        if ($seen.Count -gt 1) { return $false }
+      }
+    }
+    return $true
+  }
+
+  # How many of 9 sample points inside the target rect are covered by ANOTHER process?
+  # Used only to decide whether falling back to screen pixels would be honest.
+  function Get-OccludedCount($r, $ownPid) {
+    $covered = 0
+    foreach ($fx in 0.15, 0.5, 0.85) {
+      foreach ($fy in 0.15, 0.5, 0.85) {
+        $px = [int]($r.Left + ($r.Right - $r.Left) * $fx)
+        $py = [int]($r.Top + ($r.Bottom - $r.Top) * $fy)
+        $owner = [CoachShot]::OwnerPidAt($px, $py)
+        if ($owner -ne -1 -and $owner -ne $ownPid) { $covered++ }
+      }
+    }
+    return $covered
+  }
+
+  $bitmap = $null
+  $method = ''
+  $occluded = 0
+
+  # 1) Preferred: the window renders itself. Unaffected by stacking order.
+  $attempt = New-Object System.Drawing.Bitmap $width, $height
+  $attemptGraphics = [System.Drawing.Graphics]::FromImage($attempt)
+  $hdc = $attemptGraphics.GetHdc()
+  # 2 = PW_RENDERFULLCONTENT (Windows 8.1+): required for DirectComposition /
+  # hardware-accelerated windows, where plain PrintWindow returns an empty frame.
+  $printed = $false
+  try { $printed = [CoachShot]::PrintWindow($pick.hwnd, [IntPtr]$hdc, 2) } catch { $printed = $false }
+  $attemptGraphics.ReleaseHdc([IntPtr]$hdc)
+  $attemptGraphics.Dispose()
+  if ($printed -and -not (Test-FlatBitmap $attempt)) {
+    $bitmap = $attempt
+    $method = 'printwindow'
+  } else {
+    # PrintWindow failed or produced a flat frame (common for GPU-drawn windows).
+    $attempt.Dispose()
+    $occluded = Get-OccludedCount $rect $pick.pid
+    if ($occluded -gt 0) {
+      # Falling back to screen pixels here would capture the covering window.
+      # Refuse instead of returning someone else's pixels as evidence.
+      Write-Result @{
+        ok = $false
+        error = 'occluded'
+        title = $pick.title
+        process = $pick.process
+        pid = $pick.pid
+        covered = $occluded
+      }
+      exit 0
+    }
+    $bitmap = New-Object System.Drawing.Bitmap $width, $height
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size $width, $height))
+    $graphics.Dispose()
+    $method = 'screen'
+  }
 
   # A single flat color almost always means the capture failed
   # (minimized / exclusive fullscreen / DRM / GPU black frame), so it must not count as evidence.
-  $colors = @{}
-  $stepX = [Math]::Max(1, [int]($width / 16))
-  $stepY = [Math]::Max(1, [int]($height / 16))
-  for ($x = 0; $x -lt $width; $x += $stepX) {
-    for ($y = 0; $y -lt $height; $y += $stepY) {
-      $colors[$bitmap.GetPixel($x, $y).ToArgb()] = $true
-      if ($colors.Count -gt 1) { break }
-    }
-    if ($colors.Count -gt 1) { break }
-  }
-  if ($colors.Count -le 1) {
+  if (Test-FlatBitmap $bitmap) {
     $bitmap.Dispose()
-    Write-Result @{ ok = $false; error = 'blank_image'; title = $pick.title; process = $pick.process; pid = $pick.pid }
+    Write-Result @{ ok = $false; error = 'blank_image'; title = $pick.title; process = $pick.process; pid = $pick.pid; method = $method }
     exit 0
   }
 
@@ -337,6 +428,7 @@ public static class CoachShot {
     pid = $pick.pid
     process = $pick.process
     title = $pick.title
+    method = $method
   }
 } catch {
   Write-Result @{
@@ -403,6 +495,13 @@ function captureFailure(result) {
         detail: `窗口「${title}」抓到的是纯色画面（常见于最小化、独占全屏、DRM 或 GPU 黑屏），`
           + '不能当证据。请用户把窗口用普通模式显示出来再试。',
       }
+    case 'occluded':
+      return {
+        detail: `窗口「${title}」（${processName}）被别的窗口挡住了 ${result?.covered ?? '多'} 处，`
+          + '插件无法在不截到遮挡物的前提下拿到它的画面（这类窗口只能从屏幕像素取图）。'
+          + '**不要拿这张图判通过，也不要重试同一个 target**。请让用户把该窗口切到最前面'
+          + '（或最小化挡住它的窗口）后再截一次。',
+      }
     case 'zero_size':
     case 'no_rect':
       return { detail: `窗口「${title}」没有可截取的区域（可能已关闭或尺寸为 0）。请用户重新打开后再试。` }
@@ -414,7 +513,7 @@ function captureFailure(result) {
 }
 
 /**
- * 截一张图并存成附件（v0.4.3）。
+ * 截一张图并存成附件（v0.4.3；v0.4.4 增加抓取方式与 `occluded` 失败）。
  *
  * 只做三件事：跑抓屏脚本 → 读回 PNG → `attachments.saveImage`。
  * 抓屏失败**不抛错**，而是返回一条 `ok:false` 的事实——它会落进 `checks`，
@@ -550,10 +649,15 @@ async function observeScreenshot(deps, target, exec) {
     : ''
   const windowTitle = clip(result.title ?? '', 120)
   const kept = config.screenshotKeepFiles === true ? `；文件留在 ${outPath}` : ''
+  // v0.4.4：记下这张图是「窗口自渲染」还是「屏幕像素」，排查遮挡问题时这是关键信息。
+  const method = result.method === 'printwindow' || result.method === 'screen' ? result.method : ''
+  const how = method === 'printwindow' ? '（窗口自渲染，不受遮挡影响）'
+    : method === 'screen' ? '（屏幕像素）'
+      : ''
   return {
     ok: true,
     detail: `窗口「${windowTitle}」（${result.process ?? '?'}，pid ${result.pid ?? '?'}）`
-      + `已截图 ${width}×${height}${resized}；画面已存进附件 ${String(reference.attachmentId).slice(0, 12)}…${kept}`,
+      + `已截图 ${width}×${height}${resized}${how}；画面已存进附件 ${String(reference.attachmentId).slice(0, 12)}…${kept}`,
     shot: {
       id: String(reference.attachmentId),
       path: outPath,
@@ -562,6 +666,7 @@ async function observeScreenshot(deps, target, exec) {
       window: windowTitle,
       process: clip(result.process ?? '', 120),
       pid: Number.isInteger(result.pid) ? result.pid : null,
+      method,
     },
     image: { type: 'image', attachment: reference },
   }
@@ -610,6 +715,7 @@ export function createCheckTool(deps) {
           shotPath: { type: 'string' },
           shotProcess: { type: 'string' },
           shotPid: { type: 'number' },
+          shotMethod: { type: 'string' },
           windowTitle: { type: 'string' },
           width: { type: 'number' },
           height: { type: 'number' },
@@ -660,6 +766,7 @@ export function createCheckTool(deps) {
             window: value.windowTitle ?? '',
             process: value.shotProcess ?? '',
             pid: value.shotPid ?? null,
+            method: value.shotMethod ?? '',
           },
       }),
     },
@@ -744,6 +851,7 @@ export function createCheckTool(deps) {
           shotPath: shot.path,
           shotProcess: shot.process,
           shotPid: shot.pid ?? undefined,
+          shotMethod: shot.method === '' ? undefined : shot.method,
           windowTitle: shot.window,
           width: shot.width,
           height: shot.height,

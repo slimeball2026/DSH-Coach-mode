@@ -33,10 +33,13 @@ export const ENV_PROBE_KEY = 'env'
 export const ENV_PROBE_PHASES = ['INIT', 'CHECK_TOOL_AVAILABILITY']
 
 /**
- * 归一化一条截图元数据（v0.4.3）。
+ * 归一化一条截图元数据（v0.4.3，v0.4.4 增加 `method`）。
  *
  * 纯函数：只做类型收敛，不做 IO，也不读时间。`shot` 会原样进 `checks` 条目，
  * 折叠时从 `presentationMeta` 走同一条路，所以字段一旦定下就不要轻易改名。
+ *
+ * `method` 是**可选**字段：v0.4.3 写下的旧记录没有它，归一化成 `''` 即可，
+ * 因此不需要升 `stateVersion`。
  * @param {unknown} raw 来自 `coach_check` 的截图事实。
  * @returns {object|null}
  */
@@ -46,6 +49,7 @@ export function normalizeShot(raw) {
   const id = text(raw.id, 80)
   if (id === '') return null
   const dimension = (value) => (Number.isInteger(value) && value > 0 ? value : 0)
+  const method = text(raw.method, 16)
   return {
     id,
     path: text(raw.path, 400),
@@ -54,6 +58,7 @@ export function normalizeShot(raw) {
     window: text(raw.window, 200),
     process: text(raw.process, 120),
     pid: Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : null,
+    method: method === 'printwindow' || method === 'screen' ? method : '',
   }
 }
 

@@ -11,7 +11,19 @@
 档 1 只做三件事（`SPEC-档1最小切片.md` 第 1 节）：
 **状态机骨架**、**强制核查触发**、**合格标准进状态**。其余功能推迟到档 2。
 
-> **当前版本 0.4.3（2026-11-06）**：**截图软核查**——新增证据类型 `screen` 与核查种类 `screenshot`：
+> **当前版本 0.4.4（2026-11-10）**：**截图不再截到遮挡物**——v0.4.3 的 `CopyFromScreen`
+> 读的是"屏幕矩形里的像素"，目标窗口被任何窗口压住时会**静默把遮挡物当证据**返回，
+> `coach_verify` 还会照常放行（错图比失败图危害大）。v0.4.4 改为分层抓取：
+> ① 优先 `PrintWindow(PW_RENDERFULLCONTENT)`——让目标窗口自己渲染，**不受遮挡影响**；
+> ② 失败或纯色时检测 9 个采样点的遮挡情况，**被遮挡就直接报 `occluded` 失败，
+> 绝不回退屏幕像素**；③ 只有确认没被遮挡才走原来的 `CopyFromScreen`（GPU 直绘窗口只有
+> 这条能拿到画面）。窗口尺寸改用 DWM 扩展边框，去掉 `GetWindowRect` 里不可见的
+> 阴影边距（实测 Win10 每边 7px）。`shot` 元数据新增 `method`（`printwindow` / `screen`，
+> 可选字段，旧记录归 `''`），状态块的核查摘要会标 `［自渲染］` / `［屏幕像素］`。
+> **不升 `stateVersion`、不加工具、不加配置项**。单测 **171**。实机已验：记事本被全屏
+> 置顶窗口盖住仍能截到本身；Blender 被盖住时明确报 `occluded` 而不是返回遮挡物。
+>
+> **0.4.3（2026-11-06）**：**截图软核查**——新增证据类型 `screen` 与核查种类 `screenshot`：
 > `coach_check(kind="screenshot", target="<进程名 / 窗口标题片段 / foreground / pid:1234>")`
 > 直接截用户屏幕上**那一个窗口**，PNG 存进 `ctx.attachments`、以图片块回给模型。
 > **默认关闭**（`screenshotEnabled`，截屏会把用户屏幕内容发给模型），同一步有张数上限。
@@ -101,7 +113,7 @@
 | `guard.js` | `write` / `edit` 的确定性拒绝 |
 | `core/` | **纯核心**：状态机、计划校验、判定规则、跳过、回退、暂停/恢复、检索脱敏/缓存、进度摘要、支撑等级、渲染、折叠。零宿主依赖、零 IO、零时间、零随机 |
 | `tools/*.js` | **8 个**教练工具 + `define-tool.js`（本地版 `defineTool`：把参数表编译成原始 JSON Schema） |
-| `test/` | 零依赖单测（162 个用例） |
+| `test/` | 零依赖单测（171 个用例） |
 | `_dev/` | **仅开发期用**：把抓屏脚本落成 `.ps1` / 按生产路径跑一遍抓屏的探针。不进 `package.json` 的 `files`，安装时不会被带上 |
 | `locale/*.json`、`icon.svg` | 插件卡片显示元数据 |
 
@@ -303,11 +315,19 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 第二条是关键：**截图证明的是"屏幕现在长这样"，不是"用户做完了"**。所以判定仍然要用户先说话，
 截图只负责把"现在长这样"变成可核对的事实。
 
-**抓取实现**：`ctx.get('subprocess')` 起 `powershell -EncodedCommand`（UTF-16LE，避免引号与编码问题），
-脚本用 Win32 `EnumWindows` + `GetWindowRect` 找到窗口，`SetProcessDpiAwarenessContext(PER_MONITOR_V2)`
-避免 DPI 缩放截偏，`Graphics.CopyFromScreen` 只截**该窗口矩形**（不截整屏），最后按
-`screenshotMaxWidth/Height` 等比缩放并存 PNG。窗口最小化、纯色画面（黑屏/DRM/独占全屏）会**明确报失败**，
-不会把一张黑图当证据。
+**抓取实现**（v0.4.4 分层）：`ctx.get('subprocess')` 起 `powershell -EncodedCommand`
+（UTF-16LE，避免引号与编码问题），脚本用 Win32 `EnumWindows` 找到窗口，
+`DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 取**可见边框**（去掉 `GetWindowRect`
+里那圈不可见的 DWM 阴影边距），然后按顺序尝试：
+1. `PrintWindow(PW_RENDERFULLCONTENT)`——让窗口自己渲染进位图，**窗口被别的窗口压住也照常拿到内容**；
+2. 失败或抓到纯色时，用 `WindowFromPoint` 采样窗口矩形内 9 个点判断是否被其他进程的窗口盖住；
+   **被遮挡 → 直接报 `occluded` 失败**（这通常意味着目标是 GPU 直绘窗口），
+   **绝不回退到屏幕像素**——那等于把遮挡物截下来当证据，正是 v0.4.3 的 bug；
+3. 确认没有被遮挡才走 `Graphics.CopyFromScreen`。
+最后按 `screenshotMaxWidth/Height` 等比缩放并存 PNG。每张图的结果里带
+`method`（`printwindow` = 窗口自渲染，`screen` = 屏幕像素），状态块的核查摘要也会标
+`［自渲染］` / `［屏幕像素］`。窗口最小化、纯色画面（黑屏/DRM/独占全屏）、被遮挡拿不到画面
+都会**明确报失败**，不会把一张错图当证据。
 
 **隐私**：`screenshotEnabled` 默认 **false**；打开后也只截**匹配到的那一个窗口**，且
 `screenshotBlockProcesses` / `screenshotBlockTitles` 默认把 DSH 自己和 Electron 挡在外面。
@@ -472,7 +492,9 @@ node --test --test-isolation=none
 
 覆盖：`machine.test.js`（11 状态全部转移 + 安装分支恢复原始目标 + 受控早退与旧证据清理）、
 `screenshot.test.js`（v0.4.3 截图软核查：计划配对、必须先截图、必须晚于用户反馈、
-最近一张失败不放行、自截不得冒充 user_artifact、`shot` 折叠、状态块文案、配置默认值与非法回落）、
+最近一张失败不放行、自截不得冒充 user_artifact、`shot` 折叠、状态块文案、配置默认值与非法回落；
+v0.4.4 抓取方式：PrintWindow 先于 CopyFromScreen、回退前必须检测遮挡、occluded 分支不得
+出现 CopyFromScreen、DWM 扩展边框、`method` 归一化与状态块标记、脚本仍为纯 ASCII）、
 `back.test.js`（v0.3.4 回退：目标解析、只能往回、旧证据/结论/跳过失效、重核后恢复推进、A11）、
 `pause.test.js`（v0.4.0 暂停/恢复：PAUSED 拒其它工具、证据不作废、安装分支/INIT 暂停、备注截断）、
 `summary.test.js`（v0.4.0 进度摘要：完成/跳过/剩余、回退失效、COMPLETE、失败与检索计数）、
@@ -556,9 +578,13 @@ node <本仓库路径>\_ref\smoke-coach.mjs
     （必须晚于用户这次反馈、最近一张必须成功），**没有做基线对比**（步开始时抓一张、结束时比像素差）——
     那要多一倍图片成本，留给下一版。所以【合格标准】仍要写成“界面上能看见 X”，
     不要写成“你点了 X”。
-22. **这些情况抓不到（不是 bug）：** 窗口最小化、独占全屏、DRM 保护、GPU 黑屏、被 UAC 安全桌面盖住。
-    失败会明说原因（`window_minimized` / `blank_image` / `no_window` + 候选窗口列表），
-    模型应当让用户把窗口恢复出来再抓，而不是拿失败结果或旧图判通过。
+22. **这些情况抓不到（不是 bug）：** 窗口最小化、独占全屏、DRM 保护、GPU 黑屏、被 UAC 安全桌面盖住，
+    以及 **v0.4.4 新增的 `occluded`：目标是 GPU 直绘窗口（Blender / 视频 / 游戏）且它被别的窗口
+    盖住**——这类窗口 `PrintWindow` 拿不到内容，而从屏幕像素取图只能截到遮挡物，所以宁可失败。
+    失败会明说原因（`window_minimized` / `blank_image` / `occluded`+采样覆盖数 / `no_window`
+    + 候选窗口列表），模型应当让用户把目标窗口切到最前面再抓，而不是拿失败结果或旧图判通过。
+    普通 UI 窗口（记事本 / 浏览器 / Electron）被盖住时 v0.4.4 **仍能截到**——那是 `PrintWindow`
+    主路径解决的问题。
 23. **截图脚本走 `ctx.subprocess`，不受 `pwsh` 工具的沙箱护栏约束。** 和本节第 1 条是同一个已知口子：
     它只在“选哪个窗口”上受限（进程名 / 标题黑名单），不在文件系统与网络访问上受限。
     这是默认关闭的另一个理由。
@@ -584,6 +610,7 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 | 检索脱敏 / 缓存字段 / 按步预算 / 正文截断 | `core/research.js` |
 | 检索工具 / 宿主 web 调用 | `tools/coach-research.js` |
 | 截图取证：窗口选择规则 / 抓屏脚本 / 附件保存 | `tools/coach-check.js`（`captureScript` / `observeScreenshot`） |
+| 截图的**抓取方式**（PrintWindow 优先 / 遮挡检测 / DWM 边框） | `tools/coach-check.js` 的 `captureScript` 内 `$method` 与 `Get-OccludedCount` 那一段 |
 | 截图的判定规则（必须在反馈之后、最近一张必须成功、自截不得冒充工质） | `core/verify.js` |
 | 截图的配置项与默认值 | `config.js`（`CONFIG_DEFAULTS`） |
 | 工具的参数与描述 | `tools/*.js` |

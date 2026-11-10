@@ -138,9 +138,11 @@ function checkSummary(state, stepKey) {
       const size = shot !== null && shot.width > 0 && shot.height > 0
         ? ` ${shot.width}×${shot.height}`
         : ''
+      // v0.4.4：标出这张图是窗口自渲染还是屏幕像素——被遮挡时模型要据此判断可信度。
+      const how = shot?.method === 'printwindow' ? '［自渲染］' : shot?.method === 'screen' ? '［屏幕像素］' : ''
       const outcome = check.ok === true ? '已存证' : '失败'
       const detail = clip(check.detail ?? '', DETAIL_BUDGET)
-      return `截图「${clip(window ?? '', DETAIL_BUDGET)}」${size} → ${outcome}`
+      return `截图「${clip(window ?? '', DETAIL_BUDGET)}」${size}${how} → ${outcome}`
         + `${detail === '' ? '' : `（${detail}）`}`
     }
     const outcome = check.ok === true ? '成功' : '未通过'

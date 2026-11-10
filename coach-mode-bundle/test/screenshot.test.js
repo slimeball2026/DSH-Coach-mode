@@ -1,5 +1,6 @@
 /**
  * v0.4.3 截图软核查（screen 证据 / screenshot 取证）的规则测试。
+ * v0.4.4 增加抓取方式（PrintWindow / 屏幕像素 / 被遮挡）的规则测试。
  *
  * 重点不是"能不能截"，而是"截图不能替用户交作业"：
  * 这四条规则必须是代码里的 if，模型绕不过去。
@@ -15,6 +16,7 @@ import { applyUserFeedback } from '../core/skip.js'
 import { applyCheck, applyVerify, normalizeShot } from '../core/verify.js'
 import { applyToolCall } from '../core/reduce.js'
 import { resolveCoachConfig } from '../config.js'
+import { captureScript, parseCaptureOutput } from '../tools/coach-check.js'
 
 /** 造一个"只看界面"的单步计划。 */
 function screenPlan(overrides = {}) {
@@ -278,5 +280,125 @@ test('v0.4.3 normalizeShot：缺 id 的一律丢弃，尺寸只收正整数', ()
     window: '',
     process: '',
     pid: null,
+    method: '',
   })
+})
+
+// ── v0.4.4：抓取方式 ────────────────────────────────────────────────────────
+
+/** 抓屏脚本的一次典型调用参数。 */
+function scriptOptions(overrides = {}) {
+  return {
+    target: 'notepad',
+    outPath: 'C:\\work\\.coach\\shots\\shot-1.png',
+    maxWidth: 1600,
+    maxHeight: 1000,
+    blocked: ['deepseek harness'],
+    blockedTitles: ['deepseek harness'],
+    selfPid: 4242,
+    ...overrides,
+  }
+}
+
+test('v0.4.4 抓屏脚本：PrintWindow 在 CopyFromScreen 之前，且用 PW_RENDERFULLCONTENT', () => {
+  const script = captureScript(scriptOptions())
+  const printAt = script.indexOf('PrintWindow($pick.hwnd')
+  const screenAt = script.indexOf('$graphics.CopyFromScreen($rect')
+  assert.ok(printAt > 0, '脚本里必须有 PrintWindow')
+  assert.ok(screenAt > 0, '回退路径仍保留 CopyFromScreen')
+  assert.ok(printAt < screenAt, 'PrintWindow 必须先尝试，CopyFromScreen 只能作为回退')
+  assert.match(script, /PW_RENDERFULLCONTENT/)
+  assert.match(script, /PrintWindow\(\$pick\.hwnd, \[IntPtr\]\$hdc, 2\)/)
+})
+
+test('v0.4.4 抓屏脚本：回退前必须检测遮挡，被遮挡时不许走屏幕像素', () => {
+  const script = captureScript(scriptOptions())
+  const occludeAt = script.indexOf('$occluded = Get-OccludedCount')
+  const screenAt = script.indexOf('$graphics.CopyFromScreen($rect')
+  assert.ok(occludeAt > 0, '脚本里必须有遮挡检测')
+  assert.ok(occludeAt < screenAt, '遮挡检测必须在回退到屏幕像素之前')
+  // 被遮挡 → 直接报 occluded 退出，而不是继续 CopyFromScreen
+  assert.match(script, /error = 'occluded'/)
+  const occludedBlock = script.slice(script.indexOf('if ($occluded -gt 0)'), screenAt)
+  assert.match(occludedBlock, /error = 'occluded'/, 'occluded 分支里必须先报失败')
+  assert.doesNotMatch(occludedBlock, /CopyFromScreen/, 'occluded 分支里不能出现 CopyFromScreen')
+})
+
+test('v0.4.4 抓屏脚本：窗口尺寸用 DWM 扩展边框，去掉不可见阴影边距', () => {
+  const script = captureScript(scriptOptions())
+  assert.match(script, /DwmGetWindowAttribute/)
+  assert.match(script, /TryGetFrame/)
+  // 9 = DWMWA_EXTENDED_FRAME_BOUNDS
+  assert.match(script, /DwmGetWindowAttribute\(hWnd, 9, out rect/)
+  // 矩形获取只能走 TryGetFrame（内部回落 GetWindowRect），不能再直接 GetWindowRect 取尺寸
+  assert.doesNotMatch(script, /if \(-not \[CoachShot\]::GetWindowRect\(\$pick\.hwnd/)
+})
+
+test('v0.4.4 抓屏脚本：成功结果带 method，失败结果也带 method', () => {
+  const script = captureScript(scriptOptions())
+  assert.match(script, /\$method = 'printwindow'/)
+  assert.match(script, /\$method = 'screen'/)
+  assert.match(script, /method = \$method/)
+  // blank_image 失败也要说明是用哪种方式抓出来的纯色
+  const blankBlock = script.slice(script.indexOf("error = 'blank_image'"))
+  assert.match(blankBlock.slice(0, 200), /method = \$method/)
+})
+
+test('v0.4.4 抓屏脚本：仍是纯 ASCII，且单引号正确转义', () => {
+  const script = captureScript(scriptOptions({ target: "O'Brien" }))
+  assert.match(script, /^[\x00-\x7F]*$/, '脚本必须保持 ASCII（-EncodedCommand 与 PS5.1 编码约束）')
+  assert.ok(script.includes("'O''Brien'"), '单引号必须转义成两个单引号')
+})
+
+test('v0.4.4 parseCaptureOutput：能从噪声里取到 occluded 结果', () => {
+  const parsed = parseCaptureOutput('warning: something\n{"ok":false,"error":"occluded","covered":9}\n')
+  assert.equal(parsed.error, 'occluded')
+  assert.equal(parsed.covered, 9)
+})
+
+test('v0.4.4 normalizeShot：保留 method，未知值归空，旧记录不受影响', () => {
+  assert.equal(normalizeShot({ id: 'a', method: 'printwindow' }).method, 'printwindow')
+  assert.equal(normalizeShot({ id: 'a', method: 'screen' }).method, 'screen')
+  assert.equal(normalizeShot({ id: 'a', method: 'magic' }).method, '')
+  // v0.4.3 写下的记录没有 method 字段，仍能正常归一化
+  assert.equal(normalizeShot({ id: 'a', path: 'p.png' }).method, '')
+})
+
+test('v0.4.4 渲染：状态块标出截图是自渲染还是屏幕像素', () => {
+  let state = screenPlan()
+  state = applyUserFeedback(state, '打开了', 20)
+  const shot = (method) => ({
+    kind: 'screenshot',
+    target: 'blender',
+    ok: true,
+    detail: '已截图',
+    shot: { id: 'att-1', path: 'x.png', width: 800, height: 600, window: 'Blender', process: 'blender', pid: 1, method },
+  })
+
+  const printed = renderStateBlock(applyCheck(state, shot('printwindow'), 21), { screenshotEnabled: true })
+  assert.match(printed, /［自渲染］/)
+
+  const screen = renderStateBlock(applyCheck(state, shot('screen'), 21), { screenshotEnabled: true })
+  assert.match(screen, /［屏幕像素］/)
+})
+
+test('v0.4.4 折叠：method 会随 presentationMeta 进状态，重启后能重算', () => {
+  let state = screenPlan()
+  state = applyUserFeedback(state, '打开了', 20)
+  state = applyToolCall(state, {
+    id: 'c1',
+    name: 'coach_check',
+    args: { kind: 'screenshot', target: 'blender' },
+    meta: {
+      coachTool: 'coach_check',
+      stepKey: '0:0',
+      kind: 'screenshot',
+      target: 'blender',
+      ok: true,
+      detail: '已截图',
+      shot: { id: 'att-9', path: 'p.png', width: 800, height: 600, window: 'B', process: 'blender', pid: 7, method: 'printwindow' },
+    },
+    at: 21,
+  })
+  assert.equal(state.checks.at(-1).shot.method, 'printwindow')
 })
