@@ -29,7 +29,12 @@
 
 ### 模拟产物
 - `_ref/demo-note.mjs`：造会话 → preview → 用户确认 → save，真实落盘；
-  产物 `_ref/coach-note-demo.md`（内嵌 2 张 PNG）。
+  产物 `_ref/coach-note-demo.md`（内嵌 2 张 960×600 PNG）。
+- `_ref/demo-assets/generate.py`：生成模拟截图；之前 96×64 的占位图在预览里太小，
+  现在按真实窗口比例出图。
+
+### 修复
+- 记录状态表：当前步骤与之前未通过的步骤标「未完成」，只有还没轮到的步骤才是「未开始」。
 
 ## [0.4.5] - 2026-11-13
 

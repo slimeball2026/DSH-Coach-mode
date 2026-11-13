@@ -200,9 +200,10 @@ export function stepStatus(state, sectionIndex, stepIndex) {
   const current = currentStep(state)
   if (current === undefined) return '未完成'
   const [currentSection, currentStepIndex] = current.key.split(':').map(Number)
-  const before = sectionIndex < currentSection
-    || (sectionIndex === currentSection && stepIndex < currentStepIndex)
-  return before ? '未完成' : '未开始'
+  // 当前步算「未完成」（正在做），之前的未通过步骤也算未完成；只有还没轮到的才是未开始。
+  const started = sectionIndex < currentSection
+    || (sectionIndex === currentSection && stepIndex <= currentStepIndex)
+  return started ? '未完成' : '未开始'
 }
 
 /**
