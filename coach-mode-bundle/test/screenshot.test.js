@@ -283,6 +283,8 @@ test('v0.4.3 normalizeShot：缺 id 的一律丢弃，尺寸只收正整数', ()
     process: '',
     pid: null,
     method: '',
+    mediaType: '',
+    bytes: 0,
   })
 })
 

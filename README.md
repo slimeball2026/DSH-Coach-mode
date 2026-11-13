@@ -100,7 +100,7 @@ INIT ──coach_plan──▶ (确认环境) ──▶ PLAN ──受理──�
 
 ```
 plugin_manager action: install_bundle
-target: <某个目录>\local-coach-mode-0.4.5.tgz
+target: <某个目录>\local-coach-mode-0.5.0.tgz
 ```
 
 ### 注意事项
@@ -145,19 +145,19 @@ target: <某个目录>\local-coach-mode-0.4.5.tgz
 
 ```
 coach-mode-bundle/          ← 插件本体（安装目标）
-  index.js                 宿主插件入口：状态块 + 守卫 + 8 个工具
+  index.js                 宿主插件入口：状态块 + 守卫 + 9 个工具
   cordis.patch.yml         唯一的声明文件（preset + persona）
   config.js                配置默认值与归一化（不导出 schema）
   projection.js            按需折叠会话日志 → CoachState
   inject.js                每轮状态块注入
   guard.js                 write / edit / apply_patch 的确定性拒绝
   core/                    纯核心：零宿主 import、零 IO、零时间、零随机
-  tools/                   8 个教练工具 + 本地 defineTool
-  test/                    零依赖单测（204 个用例）
+  tools/                   9 个教练工具 + 本地 defineTool
+  test/                    零依赖单测（238 个用例）
   README.md                行为、Config、已知限制（改动前先读）
 
 SPEC-档2-教练模式.md         施工图：Q1–Q7 决策、状态机、各版本实现与验收
-SPEC-档3-学习记录.md         0.5 设计稿：coach_note（学习记录 / 文档导出）
+SPEC-档3-学习记录.md         档 3 设计稿 + 实施记录：coach_note（学习记录 / 文档导出）
 coach-mode-档1-验收报告.md   档 1 的验收证据（会话 id + 事件 seq）
 
 prompt_and_work-document/   按阅读顺序编排的设计/交接文档（00–13）
@@ -189,9 +189,9 @@ node ../_ref/replay-check.mjs <session.v4.jsonl.zstd>
 
 ## 版本
 
-当前 **0.4.5**（2026-11-13）。完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前 **0.5.0**（2026-11-13）。完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-- `stateVersion` **11**、**8 个**教练工具、**11 个**相位、单测 **204**
+- `stateVersion` **12**、**9 个**教练工具、**11 个**相位、单测 **238**
 - 验收：A1–A15（A8–A15 有实机记录，见 `SPEC-档2-教练模式.md` 与 `_verify-20261018/`）
 
 ## 设计与文档
@@ -208,6 +208,7 @@ node ../_ref/replay-check.mjs <session.v4.jsonl.zstd>
 - **只做同会话**：暂停、回退、进度都跟当前会话绑定，不跨会话续接。
 - **`pwsh` / `bash` 不加守卫**："不代做"在命令行这一项上仍靠提示词（v0.4.5 起人设明确禁止用 shell 写文件）；`write` / `edit` / `apply_patch` 是物理拒绝的。
 - **截图只在 Windows 上有后端**：其他平台状态块不广告截图，`screen` 步骤在计划受理前被拒；但模型仍可走 `bash`/`pwsh` + `read_image` 自己看图（不写 `checks`，不能用于通过核查）。
+- **学习记录只进 `.coach/notes/`**：`coach_note` 只创建不覆盖、只读会话拒绝；保存必须 preview → 用户确认；图片内嵌会放大文件。
 - **读文件不受沙箱限制**：`read_file` 能读工作区外路径（有 `readFileMaxBytes` / `readFileMaxChars` 两道截断），与宿主 `read` 工具一致。
 - **Config 没有 schema / 表单**：字段只能手改 `cordis.patch.yml`，写错会静默回落默认值。
 - **支撑等级是软约束**：它改变"讲多细"，但计划里的 `【请执行】` 原文不变，模型仍可能讲得太细。

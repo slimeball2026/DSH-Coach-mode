@@ -1,10 +1,36 @@
 # SPEC · 档 3（v0.5）学习记录 / `coach_note`
 
-> **状态**：设计稿（2026-11-13），尚未实现。用户已拍板三条（§0），其余为本 SPEC 的默认方案，可再改。
+> **状态**：**已实现（0.5.0，2026-11-13）**。用户已拍板三条（§0）；偏差见「实施状态」。
 > **基线**：bundle **0.4.5** / `stateVersion` **11** / **8 个**教练工具 / 单测 **204** / DSH **0.2.2-rc.1**。
-> **目标版本**：**0.5.0**；`stateVersion` **12**；工具数 **9**；相位不变（11）。
+> **目标版本**：**0.5.0**；`stateVersion` **12**；工具数 **9**；相位不变（11）；单测 **238**。
 > **关系**：档 1（`03. SPEC-档1最小切片.md`）已冻结；档 2（`SPEC-档2-教练模式.md`）的 D1–D11、R1–R16 继续有效。
 > 本档只新增一个**只写记录、不可编辑**的能力，**不放松** `write` / `edit` 守卫。
+
+---
+
+## 实施状态（0.5.0，2026-11-13）
+
+已按本 SPEC 落地，代码在 `coach-mode-bundle/`：
+
+| 层 | 文件 |
+|---|---|
+| 渲染核心 | `core/note.js`（`normalizeNoteInput` / `renderNote` / `selectNoteImages` / `redactSecrets`） |
+| 状态规则 | `core/note-state.js`（`assertNoteSaveable` / `applyNote` / `findAlreadySaved`） |
+| 适配层 | `tools/coach-note.js`（路径、权限、读图、写盘、幂等） |
+| 折叠 | `core/reduce.js` 的 `coach_note` 分支；`core/machine.js` 的 `notes` / `STATE_VERSION = 12` |
+| 状态块 | `core/render.js` 的【记录】一行 |
+| 人设 | `cordis.patch.yml` 的【学习记录】与 `coach_note` 条目 |
+| 测试 | `test/note.test.js` / `note-state.test.js` / `note-tool.test.js`，全量 **238** |
+
+**与设计稿的实现差异（均为有意）**
+
+1. **preview 不展开图片**：预览只写占位符「保存时内嵌」，避免 base64 把 16 KB 的预览上限撑爆；
+   保存时才读附件并内嵌。A17-1 按此验收。
+2. **`nextSteps` 并入 §1**：不新增第 6 段，保持「固定 5 段」。
+3. **复用 `userArtifacts`**：v0.4.5 已有该字段，0.5.0 只把它从 `{id,kind,at}` 扩展为带完整 `ref`；
+   教练截图需要 `shot.mediaType` / `shot.bytes`，也在 0.5.0 补进 `shot` 元数据。
+4. **`noteMaxBytes` 默认 8 MiB**：3 张 3 MiB 的图 base64 后约 4 MiB，留余量。
+5. **A17-19/20 仍需实机**：COMPLETE 提议一次、用户拒绝后不再提——这两条是提示词行为，单测覆盖不到。
 
 ---
 
@@ -380,7 +406,7 @@ config.js           新增 notesDir / note* 上限
 |---|---|---|
 | A17-1 | `preview` | 不创建任何文件；返回 Markdown；状态块显示「有 1 份预览未保存」 |
 | A17-2 | 同回合 `preview` + `save` | `COACH_NOTE_PREVIEW_REQUIRED`（没有用户消息） |
-| A17-3 | 用户说「好」之后 `save` | 文件落在 `.coach/notes/`，正文与预览一致（`generatedAt` 除外） |
+| A17-3 | 用户说「好」之后 `save` | 文件落在 `.coach/notes/`；事实区与预览一致，图片在保存时才内嵌（`generatedAt` / 证据段除外） |
 | A17-4 | `notesDir: "../x"` / 绝对路径 | `COACH_NOTE_PATH` |
 | A17-5 | 目录内已有同名文件 | 生成 `-2`，不覆盖 |
 | A17-6 | 只读会话 | `COACH_NOTE_READONLY` |
@@ -397,7 +423,8 @@ config.js           新增 notesDir / note* 上限
 | A17-17 | `write` / `edit` / `apply_patch` | 仍被守卫拒绝（回归） |
 | A17-18 | 渲染同一状态两次 | 逐字节相同（`now` 固定） |
 
-实机验收留空：`A17-19`（COMPLETE 提议一次后不再重复）、`A17-20`（用户拒绝后不写）。
+A17-1 – A17-18 已由单测覆盖；实机验收留空：`A17-19`（COMPLETE 提议一次后不再重复）、
+`A17-20`（用户拒绝后不写）。
 
 ---
 

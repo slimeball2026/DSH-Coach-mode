@@ -11,7 +11,13 @@
 档 1 只做三件事（`SPEC-档1最小切片.md` 第 1 节）：
 **状态机骨架**、**强制核查触发**、**合格标准进状态**。其余功能推迟到档 2。
 
-> **当前版本 0.4.5（2026-11-13）**：**评审修复轮**。七件事：
+> **当前版本 0.5.0（2026-11-13）**：**学习记录 `coach_note`**（SPEC-档3）。第 9 个工具，
+> 把会话整理成 Markdown：事实区（进度/跳过/回退）由插件算，解释区（复盘/概念/踩坑/下一步）
+> 由模型写，用户截图内嵌成 data URI。必须 `preview` → 用户确认 → `save`；只能写 notesDir
+> （默认 `.coach/notes/`），只创建不覆盖，只读会话拒绝；图片只收用户附件，
+> `includeCoachShots:true` 才加教练自己的成功截图。`stateVersion` 11 → **12**；工具 **9** 个；单测 **238**。
+>
+> **0.4.5（2026-11-13）**：**评审修复轮**。七件事：
 > ① 随包的 `screenshotEnabled` 回到 `false`（此前误写成 `true`，与文档和 Config 默认值矛盾）；
 > ② 截图 PNG 不再由 PowerShell 写盘，改为 base64 走 stdout 回传，**不再有 `.coach/shots/` 第二份副本**，
 >    也去掉了 `-ExecutionPolicy Bypass`；`screenshotKeepFiles` 配置项随之移除；
@@ -119,7 +125,7 @@
 | 文件 | 作用 |
 |---|---|
 | `cordis.patch.yml` | 唯一的声明文件：插入 `@deepseek-ai/dsh-agent-preset`（`id: coach`），并在它的 `plugins` 里挂一行 `coach-engine` 指向本包 |
-| `index.js` | 宿主插件入口：注册状态块、守卫、8 个工具 |
+| `index.js` | 宿主插件入口：注册状态块、守卫、9 个工具 |
 | `config.js` | 配置默认值与归一化（**不导出 `Config` schema**，原因见上面那条硬约束） |
 | `projection.js` | 按需折叠 live 会话日志 → `CoachState`（带按 seq 的缓存） |
 | `inject.js` | 每轮状态块注入（`ctx.systemPrompt.context()`） |
@@ -189,7 +195,7 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 - `PAUSED` 期间除 `coach_pause(resume)` 外，所有教练工具都被拒绝。
 - 状态**全部从会话日志折叠出来**：插件不新增事件类型、不用 storage、不注册投影单元。
 
-## 六、八个工具
+## 六、九个工具
 
 | 工具 | 作用 | 拒绝条件（代码里的 if） |
 |---|---|---|
@@ -201,6 +207,7 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 | `coach_research` | 联网检索并写检索缓存 | 阶段是 `COMPLETE` / 过渡态；宿主 `web` 服务不可用；`query` 为空 |
 | `coach_back` | 回到更早的某一步重做（同会话） | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY` / `PLAN`；目标不存在；目标不是更早的步骤（不能往前跳） |
 | `coach_pause` | 暂停 / 恢复（`action` 二选一，同会话） | `pause` 只在驻留阶段（`COMPLETE` 除外）；`resume` 只在 `PAUSED`；重复 pause / 无暂停时 resume 被拒 |
+| `coach_note` | 把会话整理成 Markdown 学习记录（预览 / 保存） | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY` / `PLAN` / `PAUSED`；`save` 没有同标题预览、或预览后用户没说话；笔记标题不一致；`notesDir` 越界；只读会话；超过 `noteMaxPerSession` / `noteMaxBytes` / 图片上限 |
 
 ### 安装分支（v0.3.3）
 
@@ -366,6 +373,7 @@ v0.4.5 起 PNG **只在附件里存一份**，不再写工作区 `.coach/shots/`
 【回退记录】  ← 有过回退时出现：最近回退到哪一步，以及旧证据/结论作废（v0.3.4）
 【进度摘要】  ← 已完成/跳过/剩余、当前板块、本步失败、检索次数（v0.4.0）
 【支撑等级】  ← 1–3，由板块表现算出；只调【请执行】讲多细（v0.4.1）
+【记录】  ← 未生成 / 有预览未保存 / 已生成 N 份，最近路径（v0.5.0）
 【暂停位置】【暂停备注】  ← 只在 PAUSED 出现；暂停块不再给执行步骤
 【降级提示】  ← 只在 DEGRADED 出现
 【强制出口】  ← 只在失败次数达到阈值时出现
@@ -463,6 +471,13 @@ case "break":     return <br>                // 只有硬换行才换行
 | `screenshotMaxBytes` | `8388608` | PNG 解码后的字节上限（超过在回传前拒绝） |
 | `screenshotBlockProcesses` | `deepseek harness` / `electron` / `dsh` | 永不作为截图目标的进程名（小写）。**写这个字段会整体替换默认值** |
 | `screenshotBlockTitles` | `deepseek harness` | 永不作为截图目标的窗口标题片段（小写）；进程名读不到时的兜底。同样整体替换 |
+| `notesDir` | `.coach/notes` | `coach_note` 的记录目录；只接受工作区内的相对路径 |
+| `noteMaxPerSession` | `5` | 单会话最多保存几份学习记录 |
+| `noteMaxBytes` | `8388608` | 一份记录渲染后的字节上限（含 base64 图片） |
+| `noteMaxImages` | `3` | 单份记录最多内嵌几张图 |
+| `noteImageMaxBytes` | `1048576` | 单张图片原始字节上限 |
+| `noteMaxTotalImageBytes` | `3145728` | 单份记录图片总字节上限 |
+| `notePreviewMaxChars` | `16000` | preview 回给模型的 Markdown 上限 |
 
 例：打开截图核查（PNG 只进附件，不落盘）：
 
@@ -525,7 +540,8 @@ v0.4.4 抓取方式：PrintWindow 先于 CopyFromScreen、回退前必须检测�
 `guard.test.js`（v0.4.5 守卫：write/edit/apply_patch 拒绝，只读与 shell 放行，畸形输入不崩）、
 `check-tool.test.js`（v0.4.5 read_file：readFileMaxChars 回传长度、readFileMaxBytes 超限不读）、
 `plan-tool.test.js`（v0.4.5 screen 计划的平台前置：Linux/macOS 与截图关闭时受理前拒绝）、
-`tool-shape.test.js`（八个工具都有非空 `description`，模型可见 schema 是无损 JSON——v0.3.4 事故回归）、
+`note.test.js` / `note-state.test.js` / `note-tool.test.js`（v0.5.0：渲染结构/脱敏/图片选择、预览门/用户确认门/回退失效/预算、路径越界/只读/撞名/图片内嵌/幂等）、
+`tool-shape.test.js`（九个工具都有非空 `description`，模型可见 schema 是无损 JSON——v0.3.4 事故回归）、
 `decoupling.test.js`（**整包**零宿主依赖 + `core/` 零 Node 内置模块 + 零时间/随机）。
 
 另有一个**零宿主依赖**的装配冒烟脚本，不碰 dsh 的 `node_modules` 就能跑通
@@ -616,9 +632,13 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 25. **图片会随历史重复计费。** 一张 1600×1000 的图约 1–2k 视觉 token，进入会话后每一轮请求都会重发，
     直到压缩；当前 profile 里 `image-offload` 未启用、`tool-result-pruner` 只裁文本。
     所以默认 `screenshotMaxPerStep: 2` 且默认缩到 1600×1000。
-26. **`stateVersion` 升到 11。** 旧会话的缓存状态会作废并重折一次（只是重算，不丢日志）；
-    v0.4.5 新增 `userArtifacts` / `userText`（`user_artifact` 判通过时校验工质来源）。
+26. **`stateVersion` 升到 12。** 旧会话的缓存状态会作废并重折一次（只是重算，不丢日志）；
+    v0.4.5 新增 `userArtifacts` / `userText`，v0.5.0 新增 `notes`。
     装回 0.4.2 不会崩，但新字段会被当成未知字段忽略。
+27. **`coach_note` 的边界。** 只能写 `notesDir`（默认 `.coach/notes/`），只创建不覆盖（撞名 `-2`…）；
+    只读会话拒绝；保存必须 preview → 用户确认 → save；回退会让预览作废。
+    图片以 data URI 内嵌（宿主 fs 无二进制写），整份上限 `noteMaxBytes` 8 MiB、最多 3 张、
+    单张 1 MiB；preview 不展开图片。记录是**产物**，不参与 `coach_verify` 的判定。
 
 ## 十一、改哪里
 
@@ -638,6 +658,9 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 | 截图的**抓取方式**（PrintWindow 优先 / 遮挡检测 / DWM 边框） | `tools/coach-check.js` 的 `captureScript` 内 `$method` 与 `Get-OccludedCount` 那一段 |
 | 截图的判定规则（必须在反馈之后、最近一张必须成功、自截不得冒充工质） | `core/verify.js` |
 | 截图的配置项与默认值 | `config.js`（`CONFIG_DEFAULTS`） |
+| 学习记录的渲染 / 格式 / 图片选择 / 脱敏 | `core/note.js` |
+| 学习记录的预览门 / 用户确认门 / 预算 / 幂等 | `core/note-state.js` |
+| 学习记录的写盘 / 路径 / 读图 / 撞名 | `tools/coach-note.js` |
 | 工具的参数与描述 | `tools/*.js` |
 
 > **改 `cordis.patch.yml` 的两条纪律**

@@ -24,6 +24,7 @@ import { applyPause } from './pause.js'
 import { applyResearch } from './research.js'
 import { applySkip, applyUserFeedback } from './skip.js'
 import { applyAdvance, applyCheck, applyVerify } from './verify.js'
+import { applyNote } from './note-state.js'
 
 /**
  * 从原始会话事件里按顺序抽出折叠需要的东西：
@@ -63,6 +64,14 @@ export function itemsFromEvents(events) {
         id: String(block.attachment.attachmentId),
         kind: block.type,
         at: typeof event.seq === 'number' ? event.seq : null,
+        // v0.5：coach_note 要把用户截图读回来内嵌，需要完整引用；只存元数据，不存字节。
+        ref: {
+          attachmentId: String(block.attachment.attachmentId),
+          mediaType: typeof block.attachment.mediaType === 'string' ? block.attachment.mediaType : '',
+          bytes: Number.isInteger(block.attachment.bytes) ? block.attachment.bytes : 0,
+          width: Number.isInteger(block.attachment.width) ? block.attachment.width : 0,
+          height: Number.isInteger(block.attachment.height) ? block.attachment.height : 0,
+        },
       }))
       items.push({
         kind: 'feedback',
@@ -183,6 +192,13 @@ export function applyToolCall(state, call, config) {
         action: meta?.action ?? args.action,
         note: meta?.note ?? args.note,
       }, at)
+
+    case 'coach_note':
+      return applyNote(state, meta ?? {
+        mode: args.mode,
+        title: args.title,
+        status: args.mode === 'preview' ? 'previewed' : 'saved',
+      }, at, config)
 
     default:
       return state

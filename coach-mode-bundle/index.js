@@ -17,6 +17,7 @@ import { registerStateBlock } from './inject.js'
 import { createProjection } from './projection.js'
 import { createAdvanceTool } from './tools/coach-advance.js'
 import { createBackTool } from './tools/coach-back.js'
+import { createNoteTool } from './tools/coach-note.js'
 import { createCheckTool } from './tools/coach-check.js'
 import { createPauseTool } from './tools/coach-pause.js'
 import { createPlanTool } from './tools/coach-plan.js'
@@ -33,7 +34,7 @@ export const inject = ['tools', 'systemPrompt']
 // 注意：**不导出 `Config`**。导出它需要 `@deepseek-ai/schemastery`，
 // 而 profile 装的 bundle 解析不到 dsh 自己的包，会导致整行加载失败。
 
-/** 八个教练工具，全部常驻注册（决策 D6：工具目录稳定，不随状态增删）。 */
+/** 九个教练工具，全部常驻注册（决策 D6：工具目录稳定，不随状态增删）。 */
 const TOOL_FACTORIES = [
   ['coach_plan', createPlanTool],
   ['coach_check', createCheckTool],
@@ -43,6 +44,7 @@ const TOOL_FACTORIES = [
   ['coach_research', createResearchTool],
   ['coach_back', createBackTool],
   ['coach_pause', createPauseTool],
+  ['coach_note', createNoteTool],
 ]
 
 /**
@@ -62,10 +64,10 @@ export function apply(ctx, config) {
   // 不代做：write / edit 确定性拒绝。
   ctx.tools.guard(coachGuard)
 
-  // 八个教练工具。
+  // 九个教练工具。
   for (const [, create] of TOOL_FACTORIES) {
     ctx.tools.register(create(deps))
   }
 
-  ctx.logger?.debug?.('coach-mode 档2 引擎已挂载：8 个工具 + 状态块 + write/edit 守卫')
+  ctx.logger?.debug?.('coach-mode 引擎已挂载：9 个工具 + 状态块 + 写守卫')
 }

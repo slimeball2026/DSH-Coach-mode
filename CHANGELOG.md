@@ -2,6 +2,35 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；`stateVersion` 是折叠语义的版本号，改它代表"旧会话要用新规则重新推导状态"。
 
+## [0.5.0] - 2026-11-13
+
+**新功能：学习记录 `coach_note`**（SPEC-档3）。第 9 个教练工具。
+
+### 新增
+- `coach_note({ mode, title, summary, concepts, pitfalls, nextSteps, includeCoachShots })`：
+  把本次会话整理成 Markdown（front matter + 目标/结果 + 学习路径表 + 关键概念 + 踩过的坑 + 证据）。
+- **事实区由插件写**：进度、跳过、回退、检索、证据目标都从 `CoachState` 算，模型入参里没有状态字段；
+  解释区（`summary` / `concepts` / `pitfalls` / `nextSteps`）才来自模型。
+- **两步保存**：`preview` 只渲染不落盘；`save` 必须晚于同标题预览、且预览之后有用户消息；
+  回退会让预览作废；同一标题重复保存（用户没再说话）返回 `already-saved`，不写第二份。
+- **路径与权限**：只能写 `notesDir`（默认 `.coach/notes/`），`fs.contains` 校验；
+  `createIfAbsent` 只创建不覆盖（撞名 `-2`…）；必须传会话 `sandboxPolicy`，只读会话拒绝。
+- **图片**：只收用户消息里的附件；`includeCoachShots:true` 才加插件成功截图；
+  以 data URI 内嵌（宿主 fs 无二进制写），单张/总量/整份都有上限；
+  读不到或超限留占位符，不静默丢。
+- **脱敏**：渲染后替换高置信度密钥，front matter 记 `redactions`；只处理文字区，不碰 base64。
+- 状态块新增【记录】（未生成 / 有预览未保存 / 已生成 N 份）；人设在 COMPLETE 提议一次。
+
+### 变更
+- `stateVersion` **11 → 12**（新增 `notes`）；工具 **8 → 9**；`package.json` 0.5.0。
+- `userArtifacts` 现在保存附件完整引用（id/mediaType/bytes/width/height），供记录读图。
+- 截图 `shot` 元数据新增 `mediaType` / `bytes`（可选字段，旧记录归空/0）。
+- 单测 **204 → 238**（`note.test.js` / `note-state.test.js` / `note-tool.test.js`）。
+
+### 模拟产物
+- `_ref/demo-note.mjs`：造会话 → preview → 用户确认 → save，真实落盘；
+  产物 `_ref/coach-note-demo.md`（内嵌 2 张 PNG）。
+
 ## [0.4.5] - 2026-11-13
 
 **评审修复轮**（按 P0 → P1 → Linux/macOS → P2 的顺序）。行为有变化，装完要重启。

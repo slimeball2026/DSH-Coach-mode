@@ -59,6 +59,9 @@ export function normalizeShot(raw) {
     process: text(raw.process, 120),
     pid: Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : null,
     method: method === 'printwindow' || method === 'screen' ? method : '',
+    // v0.5：coach_note 要把这张图读回来内嵌，需要完整的附件引用。
+    mediaType: text(raw.mediaType, 60),
+    bytes: Number.isInteger(raw.bytes) && raw.bytes > 0 ? raw.bytes : 0,
   }
 }
 

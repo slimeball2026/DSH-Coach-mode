@@ -21,8 +21,9 @@ import { createSkipTool } from '../tools/coach-skip.js'
 import { createResearchTool } from '../tools/coach-research.js'
 import { createBackTool } from '../tools/coach-back.js'
 import { createPauseTool } from '../tools/coach-pause.js'
+import { createNoteTool } from '../tools/coach-note.js'
 
-/** 八个工具的工厂（顺序与 index.js 一致）。 */
+/** 九个工具的工厂（顺序与 index.js 一致）。 */
 const FACTORIES = [
   ['coach_plan', createPlanTool],
   ['coach_check', createCheckTool],
@@ -32,6 +33,7 @@ const FACTORIES = [
   ['coach_research', createResearchTool],
   ['coach_back', createBackTool],
   ['coach_pause', createPauseTool],
+  ['coach_note', createNoteTool],
 ]
 
 /** 递归断言一个值能被宿主无损序列化。 */
@@ -63,12 +65,12 @@ function assertLossless(value, path, seen = new Set()) {
   seen.delete(value)
 }
 
-test('八个工具都有 name/description，且模型可见 schema 是无损 JSON（v0.3.4 回归）', () => {
+test('九个工具都有 name/description，且模型可见 schema 是无损 JSON（v0.3.4 回归）', () => {
   const config = resolveCoachConfig({})
   const projection = createProjection(config)
   const tools = FACTORIES.map(([, create]) => create({ config, projection, ctx: {} }))
 
-  assert.equal(tools.length, 8)
+  assert.equal(tools.length, 9)
   assert.deepEqual(tools.map((tool) => tool.name), FACTORIES.map(([name]) => name))
 
   for (const tool of tools) {

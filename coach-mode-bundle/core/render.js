@@ -215,6 +215,28 @@ function phaseGuidance(state) {
   }
 }
 
+/**
+ * v0.5.0：学习记录一行。COMPLETE 且没记录时给一次提示；有预览/保存时如实显示。
+ * PAUSED 分支不调用它（暂停块不含执行步骤）。
+ */
+function noteLine(state) {
+  const notes = Array.isArray(state.notes) ? state.notes : []
+  if (notes.length === 0) {
+    return state.phase === 'COMPLETE'
+      ? '【记录】未生成（可用 coach_note 预览；保存前需用户确认）'
+      : ''
+  }
+  const saved = notes.filter((note) => note?.status === 'saved')
+  if (saved.length > 0) {
+    const last = saved[saved.length - 1]
+    return `【记录】已生成 ${saved.length} 份，最近 ${clip(last.path || last.title || '', 80)}`
+  }
+  if (notes.some((note) => note?.status === 'preview')) {
+    return '【记录】有 1 份预览未保存（保存前需用户确认）'
+  }
+  return ''
+}
+
 /** 检索缓存摘要（v0.3.0）。 */
 function researchSummary(state) {
   const list = Array.isArray(state.research) ? state.research : []
@@ -311,6 +333,8 @@ export function renderStateBlock(state, facts = {}) {
     if (summary !== '') lines.push(summary)
     lines.push('本次目标的全部步骤已经走完。请收尾：总结这次做了什么、复盘关键点、'
       + '列出所有被跳过的步骤（如有）、给出下一步学习建议。')
+    const record = noteLine(state)
+    if (record !== '') lines.push(record)
     lines.push(environment)
     return applyBudget(lines, maxStateBlockChars).join('\n')
   }
@@ -373,6 +397,8 @@ export function renderStateBlock(state, facts = {}) {
       .map((entry) => `${clip(entry.id ?? '', 80)}（${entry.kind ?? '附件'}，seq ${entry.at ?? '?'}）`)
     lines.push(`【用户工质】${shown.join('；')}`)
   }
+  const record = noteLine(state)
+  if (record !== '') lines.push(record)
 
   const back = latestBack(state)
   if (back !== undefined) {

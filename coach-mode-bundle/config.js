@@ -64,6 +64,21 @@ export const CONFIG_DEFAULTS = {
   screenshotBlockProcesses: ['deepseek harness', 'electron', 'dsh'],
   /** 永不作为截图目标的窗口标题片段（小写）——进程名读不到时的兜底。 */
   screenshotBlockTitles: ['deepseek harness'],
+  // v0.5.0 `coach_note`（SPEC-档3）：只写工作区内的 notesDir，只创建不覆盖。
+  /** 记录目录（相对工作区）；必须解析后仍在工作区内。 */
+  notesDir: '.coach/notes',
+  /** 单会话最多保存几份记录。 */
+  noteMaxPerSession: 5,
+  /** 一份记录渲染后的字节上限（含 base64 图片）。 */
+  noteMaxBytes: 8388608,
+  /** 单份记录最多内嵌几张图。 */
+  noteMaxImages: 3,
+  /** 单张图片的原始字节上限。 */
+  noteImageMaxBytes: 1048576,
+  /** 单份记录图片总字节上限（原始字节，base64 前）。 */
+  noteMaxTotalImageBytes: 3145728,
+  /** preview 回给模型的 Markdown 上限（字符）。 */
+  notePreviewMaxChars: 16000,
 }
 
 /** 取正整数，非法就用默认值。 */
@@ -119,5 +134,14 @@ export function resolveCoachConfig(config) {
       raw.screenshotBlockTitles,
       CONFIG_DEFAULTS.screenshotBlockTitles,
     ).map((entry) => entry.toLowerCase()),
+    notesDir: typeof raw.notesDir === 'string' && raw.notesDir.trim() !== ''
+      ? raw.notesDir.trim()
+      : CONFIG_DEFAULTS.notesDir,
+    noteMaxPerSession: naturalOf(raw.noteMaxPerSession, CONFIG_DEFAULTS.noteMaxPerSession),
+    noteMaxBytes: naturalOf(raw.noteMaxBytes, CONFIG_DEFAULTS.noteMaxBytes),
+    noteMaxImages: naturalOf(raw.noteMaxImages, CONFIG_DEFAULTS.noteMaxImages),
+    noteImageMaxBytes: naturalOf(raw.noteImageMaxBytes, CONFIG_DEFAULTS.noteImageMaxBytes),
+    noteMaxTotalImageBytes: naturalOf(raw.noteMaxTotalImageBytes, CONFIG_DEFAULTS.noteMaxTotalImageBytes),
+    notePreviewMaxChars: naturalOf(raw.notePreviewMaxChars, CONFIG_DEFAULTS.notePreviewMaxChars),
   }
 }
