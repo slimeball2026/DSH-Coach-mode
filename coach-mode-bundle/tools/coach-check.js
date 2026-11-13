@@ -480,6 +480,39 @@ export function parseCaptureOutput(stdout) {
   return null
 }
 
+/**
+ * v0.4.5：解码抓屏脚本回传的 base64 画面，并做完整性校验。
+ *
+ * 为什么要校验：`Buffer.from(str, 'base64')` **不会报错**——它会跳过非法字符，
+ * 截断的输出也能解出一段更短的 bytes。如果不比对脚本声明的 `bytes` 和 PNG 签名，
+ * 被 stdout 上限截断的画面会被当成正常数据送进附件服务（然后失败在一个难懂的地方）。
+ * @param {object} result 抓屏脚本的 JSON 结果。
+ * @returns {{ ok: true, data: Buffer } | { ok: false, detail: string }}
+ */
+export function decodeShotPayload(result) {
+  const payload = typeof result?.data === 'string' ? result.data : ''
+  if (payload === '') return { ok: false, detail: '截图脚本没有返回画面数据。' }
+  const data = Buffer.from(payload, 'base64')
+  if (data.length === 0) return { ok: false, detail: '截图脚本返回了空画面（base64 无法解码）。' }
+
+  const declared = Number.isInteger(result?.bytes) ? result.bytes : null
+  if (declared !== null && declared !== data.length) {
+    return {
+      ok: false,
+      detail: `截图数据长度不一致（脚本声明 ${declared} 字节，解码得到 ${data.length} 字节），`
+        + '可能被 stdout 上限截断；这次不能当证据。',
+    }
+  }
+
+  const pngMagic = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  const isPng = data.length >= pngMagic.length
+    && pngMagic.every((byte, index) => data[index] === byte)
+  if (!isPng) {
+    return { ok: false, detail: '截图数据不是 PNG（文件签名不匹配），不能当证据。' }
+  }
+  return { ok: true, data }
+}
+
 /** 把候选窗口列表写成一句可读的话。 */
 function formatCandidates(list) {
   const entries = Array.isArray(list) ? list.slice(0, 6) : []
@@ -630,8 +663,17 @@ async function observeScreenshot(deps, target, exec) {
     return { ok: false, detail: `截图脚本没有跑起来：${clip(error instanceof Error ? error.message : String(error), 200)}`, shot: null }
   }
 
-  const stdout = handle.collected?.stdout?.readFrom(0)?.text ?? ''
+  const stdoutRead = handle.collected?.stdout?.readFrom(0)
+  const stdout = stdoutRead?.text ?? ''
   const stderr = handle.collected?.stderr?.readFrom(0)?.text ?? ''
+  if (stdoutRead?.lossy === true) {
+    return {
+      ok: false,
+      detail: '截图输出超过 stdout 上限，头部已被丢弃；这次不能当证据。'
+        + '请调小 screenshotMaxWidth/Height 或 screenshotMaxBytes。',
+      shot: null,
+    }
+  }
   const result = parseCaptureOutput(stdout)
   if (result === null) {
     return {
@@ -645,11 +687,11 @@ async function observeScreenshot(deps, target, exec) {
     return { ok: false, detail: captureFailure(result).detail, shot: null }
   }
 
-  const payload = typeof result.data === 'string' ? result.data : ''
-  const data = Buffer.from(payload, 'base64')
-  if (data.length === 0) {
-    return { ok: false, detail: '截图脚本返回了空画面（base64 无法解码），不能当证据。', shot: null }
+  const decoded = decodeShotPayload(result)
+  if (decoded.ok !== true) {
+    return { ok: false, detail: decoded.detail, shot: null }
   }
+  const { data } = decoded
   if (data.length > maxBytes) {
     return {
       ok: false,

@@ -11,7 +11,9 @@
   `config.js` 默认值和 README 一致。
 - **截图不再写盘**：抓屏脚本把 PNG 编码成 base64 从 stdout 回传，适配层解码后直接进
   `ctx.attachments`；去掉 PowerShell 的 `-ExecutionPolicy Bypass`，移除 `screenshotKeepFiles`
-  配置项与工作区 `.coach/shots/` 第二份副本。
+  配置项与工作区 `.coach/shots/` 第二份副本。解码增加三重完整性校验：stdout `lossy` 检测、
+  脚本声明字节数与解码长度比对、PNG 文件签名校验——被截断的输出会明确报错，而不是把半张图
+  送进附件服务。
 - **守卫补 `apply_patch`**：`write` / `edit` / `apply_patch` 三个写入口都确定性拒绝；
   人设明确禁止用 `pwsh` / `bash` 替用户写文件。
 
@@ -41,7 +43,7 @@
 
 ### 变更
 - `stateVersion` **10 → 11**：新增 `userArtifacts` / `userText`。
-- 单测 **171 → 203**（新增 `guard.test.js`、`check-tool.test.js`、`plan-tool.test.js` 与
+- 单测 **171 → 204**（新增 `guard.test.js`、`check-tool.test.js`、`plan-tool.test.js` 与
   媒体反馈 / 失败核查 / 工质来源 / 平台收口用例）。
 
 ## [0.4.2] - 2026-10-18

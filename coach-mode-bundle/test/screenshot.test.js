@@ -18,7 +18,7 @@ import { applyCheck, applyVerify, normalizeShot } from '../core/verify.js'
 import { applyToolCall } from '../core/reduce.js'
 import { applyPause } from '../core/pause.js'
 import { resolveCoachConfig } from '../config.js'
-import { captureScript, parseCaptureOutput, createCheckTool } from '../tools/coach-check.js'
+import { captureScript, decodeShotPayload, parseCaptureOutput, createCheckTool } from '../tools/coach-check.js'
 
 /** 造一个"只看界面"的单步计划。 */
 function screenPlan(overrides = {}) {
@@ -480,4 +480,30 @@ test('v0.4.5 渲染：Linux/macOS 上不显示【可截图】，也不让模型�
   assert.match(block, /截图不可用/)
   assert.match(block, /user_artifact/)
   assert.doesNotMatch(block, /coach_check\(kind="screenshot"/)
+})
+
+// ── v0.4.5：base64 回传的完整性校验 ─────────────────────────────────────────
+
+test('v0.4.5 截图解码：合法 PNG 通过，长度不一致 / 非 PNG / 空数据被拒', () => {
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from([0x00, 0x01, 0x02, 0x03]),
+  ])
+  const good = decodeShotPayload({ data: png.toString('base64'), bytes: png.length })
+  assert.equal(good.ok, true)
+  assert.deepEqual([...good.data], [...png])
+
+  const truncated = decodeShotPayload({ data: png.toString('base64'), bytes: png.length + 10 })
+  assert.equal(truncated.ok, false)
+  assert.match(truncated.detail, /长度不一致/)
+
+  const notPng = decodeShotPayload({
+    data: Buffer.from('definitely not a png').toString('base64'),
+    bytes: Buffer.byteLength('definitely not a png'),
+  })
+  assert.equal(notPng.ok, false)
+  assert.match(notPng.detail, /不是 PNG/)
+
+  const empty = decodeShotPayload({ data: '', bytes: 0 })
+  assert.equal(empty.ok, false)
 })

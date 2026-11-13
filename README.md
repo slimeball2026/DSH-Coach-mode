@@ -153,7 +153,7 @@ coach-mode-bundle/          ← 插件本体（安装目标）
   guard.js                 write / edit / apply_patch 的确定性拒绝
   core/                    纯核心：零宿主 import、零 IO、零时间、零随机
   tools/                   8 个教练工具 + 本地 defineTool
-  test/                    零依赖单测（203 个用例）
+  test/                    零依赖单测（204 个用例）
   README.md                行为、Config、已知限制（改动前先读）
 
 SPEC-档2-教练模式.md         施工图：Q1–Q7 决策、状态机、各版本实现与验收
@@ -191,7 +191,7 @@ node ../_ref/replay-check.mjs <session.v4.jsonl.zstd>
 
 当前 **0.4.5**（2026-11-13）。完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-- `stateVersion` **11**、**8 个**教练工具、**11 个**相位、单测 **203**
+- `stateVersion` **11**、**8 个**教练工具、**11 个**相位、单测 **204**
 - 验收：A1–A15（A8–A15 有实机记录，见 `SPEC-档2-教练模式.md` 与 `_verify-20261018/`）
 
 ## 设计与文档
