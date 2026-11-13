@@ -63,12 +63,15 @@ function readyState(config = {}) {
 }
 
 /** 假 fs：只实现 resolve/contains/writeText。 */
-function fakeFs({ failFirstWrite = false } = {}) {
+function fakeFs({ failFirstWrite = false, failTextWrite = false, textFailureCode = 'GENERIC' } = {}) {
   const writes = []
+  const deletions = []
   const existing = new Set()
   let writesAttempted = 0
+  let textWritesAttempted = 0
   return {
     writes,
+    deletions,
     resolve: async (target, opts = {}) => {
       const base = opts.cwd ?? CWD
       const absolute = path.isAbsolute(target) ? target : path.join(base, target)
@@ -84,9 +87,19 @@ function fakeFs({ failFirstWrite = false } = {}) {
       if (existing.has(target.targetKey)) {
         throw Object.assign(new Error('already exists'), { code: 'FS_NOT_OBSERVED' })
       }
+      if (failTextWrite && target.targetKey.endsWith('-text.md') && textWritesAttempted === 0) {
+        textWritesAttempted += 1
+        const error = new Error('text write failed')
+        if (textFailureCode === 'FS_NOT_OBSERVED') error.code = 'FS_NOT_OBSERVED'
+        throw error
+      }
       existing.add(target.targetKey)
       writes.push({ target: target.targetKey, content, intent, policy })
       return { operation: 'create' }
+    },
+    deleteFile: async (target) => {
+      deletions.push(target.targetKey)
+      existing.delete(target.targetKey)
     },
   }
 }
@@ -146,14 +159,24 @@ test('v0.5 note 工具：preview → 用户确认 → save 写盘并内嵌用户
   assert.equal(value.status, 'saved')
   assert.ok(value.path.startsWith('.coach/notes/'))
   assert.ok(value.path.endsWith('.md'))
-  assert.equal(fs.writes.length, 1)
-  assert.equal(fs.writes[0].intent.kind, 'createIfAbsent')
-  assert.equal(fs.writes[0].target, path.join(CWD, value.path))
-  assert.match(fs.writes[0].content, /!\[用户截图 1\]\(data:image\/png;base64,/)
+  assert.ok(value.textPath.endsWith('-text.md'))
+  assert.equal(fs.writes.length, 2)
+  const full = fs.writes.find((entry) => entry.target === path.join(CWD, value.path))
+  const text = fs.writes.find((entry) => entry.target === path.join(CWD, value.textPath))
+  assert.ok(full !== undefined && text !== undefined)
+  assert.equal(full.intent.kind, 'createIfAbsent')
+  assert.match(full.content, /!\[用户截图 1\]\(data:image\/png;base64,/)
+  assert.match(full.content, /variant: "full"/)
+  assert.match(full.content, /agentRead: "-text\.md"|agentRead: ".*-text\.md"/)
+  assert.match(full.content, /不要用 `read` 读取/)
+  assert.doesNotMatch(text.content, /data:image/)
+  assert.match(text.content, /variant: "text"/)
+  assert.match(text.content, /图片见完整版/)
+  assert.match(text.content, /不要用 `read` 读取它/)
   assert.equal(value.facts.images.included, 1)
   assert.equal(reads.length, 1)
   // 事实区确实来自 state
-  assert.match(fs.writes[0].content, /## 2\. 学习路径/)
+  assert.match(full.content, /## 2\. 学习路径/)
 })
 
 test('v0.5 note 工具：只读会话直接拒绝', async () => {
@@ -181,7 +204,33 @@ test('v0.5 note 工具：文件名撞车时加后缀，绝不覆盖', async () =
   const value = await tool.execute({ mode: 'save', title: TITLE }, EXEC)
   assert.equal(value.status, 'saved')
   assert.match(value.path, /-2\.md$/)
-  assert.equal(fs.writes.length, 1)
+  assert.match(value.textPath, /-2-text\.md$/)
+  assert.equal(fs.writes.length, 2)
+})
+
+test('v0.5 note 工具：文字版撞名（FS_NOT_OBSERVED）会回滚完整版并换后缀重试', async () => {
+  const fs = fakeFs({ failTextWrite: true, textFailureCode: 'FS_NOT_OBSERVED' })
+  const { tool } = makeTool(readyState(), { fs })
+  const value = await tool.execute({ mode: 'save', title: TITLE }, EXEC)
+  assert.equal(value.status, 'saved')
+  assert.match(value.path, /-2\.md$/)
+  assert.match(value.textPath, /-2-text\.md$/)
+  assert.ok(fs.deletions.some((entry) => entry.endsWith('.md') && !entry.endsWith('-text.md')))
+  // 第一次的完整版写下了又被回滚；最终留下的是 -2 的两个文件。
+  assert.equal(fs.writes.length, 3)
+  assert.ok(fs.writes.some((entry) => entry.target.endsWith('-2.md')))
+  assert.ok(fs.writes.some((entry) => entry.target.endsWith('-2-text.md')))
+})
+
+test('v0.5 note 工具：文字版写失败（非撞名）会回滚完整版并报错，不留半份记录', async () => {
+  const fs = fakeFs({ failTextWrite: true })
+  const { tool } = makeTool(readyState(), { fs })
+  await assert.rejects(
+    tool.execute({ mode: 'save', title: TITLE }, EXEC),
+    (error) => error.code === 'COACH_NOTE_PATH',
+  )
+  assert.ok(fs.deletions.some((entry) => entry.endsWith('.md') && !entry.endsWith('-text.md')))
+  assert.equal(fs.writes.filter((entry) => entry.target.endsWith('-text.md')).length, 0)
 })
 
 test('v0.5 note 工具：includeCoachShots 才把教练截图放进去', async () => {

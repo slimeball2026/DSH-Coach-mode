@@ -6,12 +6,17 @@ goal: "学会在本地完成提交与分支操作"
 mode: "learn"
 session: "3f2a9c1e"
 stateVersion: 12
-generatedAt: 2026-11-13T20:58:19.676Z
+variant: "full"
+generatedAt: 2026-11-13T21:18:24.614Z
 generator: "coach-mode 0.5.0"
+agentRead: "2026-11-13-2218-git-text.md"
 redactions: 0
 ---
 
 # Git 入门 · 学习记录
+
+> **给 agent**：本文件内嵌 base64 图片，**不要用 `read` 读取**；请改读同目录的 `2026-11-13-2218-git-text.md`（纯文字版）。
+> 给人类：图片已内嵌，直接打开即可。
 
 > 事实区由插件从会话日志计算，解释区由模型撰写。含屏幕截图，请勿提交到公共仓库。
 

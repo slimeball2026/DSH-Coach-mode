@@ -2,7 +2,7 @@
 
 > **状态**：**已实现（0.5.0，2026-11-13）**。用户已拍板三条（§0）；偏差见「实施状态」。
 > **基线**：bundle **0.4.5** / `stateVersion` **11** / **8 个**教练工具 / 单测 **204** / DSH **0.2.2-rc.1**。
-> **目标版本**：**0.5.0**；`stateVersion` **12**；工具数 **9**；相位不变（11）；单测 **238**。
+> **目标版本**：**0.5.0**；`stateVersion` **12**；工具数 **9**；相位不变（11）；单测 **243**。
 > **关系**：档 1（`03. SPEC-档1最小切片.md`）已冻结；档 2（`SPEC-档2-教练模式.md`）的 D1–D11、R1–R16 继续有效。
 > 本档只新增一个**只写记录、不可编辑**的能力，**不放松** `write` / `edit` 守卫。
 
@@ -16,11 +16,12 @@
 |---|---|
 | 渲染核心 | `core/note.js`（`normalizeNoteInput` / `renderNote` / `selectNoteImages` / `redactSecrets`） |
 | 状态规则 | `core/note-state.js`（`assertNoteSaveable` / `applyNote` / `findAlreadySaved`） |
-| 适配层 | `tools/coach-note.js`（路径、权限、读图、写盘、幂等） |
+| 适配层 | `tools/coach-note.js`（路径、权限、读图、写盘、双文件、幂等） |
+| 读守卫 | `guard.js`（`createCoachGuard`；`read` 完整版拒绝，文字版放行） |
 | 折叠 | `core/reduce.js` 的 `coach_note` 分支；`core/machine.js` 的 `notes` / `STATE_VERSION = 12` |
 | 状态块 | `core/render.js` 的【记录】一行 |
 | 人设 | `cordis.patch.yml` 的【学习记录】与 `coach_note` 条目 |
-| 测试 | `test/note.test.js` / `note-state.test.js` / `note-tool.test.js`，全量 **238** |
+| 测试 | `test/note.test.js` / `note-state.test.js` / `note-tool.test.js` / `guard.test.js`，全量 **243** |
 
 **与设计稿的实现差异（均为有意）**
 
@@ -31,6 +32,10 @@
    教练截图需要 `shot.mediaType` / `shot.bytes`，也在 0.5.0 补进 `shot` 元数据。
 4. **`noteMaxBytes` 默认 8 MiB**：3 张 3 MiB 的图 base64 后约 4 MiB，留余量。
 5. **A17-19/20 仍需实机**：COMPLETE 提议一次、用户拒绝后不再提——这两条是提示词行为，单测覆盖不到。
+6. **完整版 + 文字版（0.5.0 同日补丁）**：`save` 写 `foo.md`（data URI）与
+   `foo-text.md`（零 base64）；两份开头都有 agent 提醒，front matter 带 `variant` /
+   `agentRead` / `full`；`guard` 拒绝教练会话 `read` 完整版并指路文字版。
+   这是“自包含”和“可读性”的解耦，不是增量文档。
 
 ---
 
@@ -111,14 +116,16 @@
   mode: 'preview' | 'save',
   status: 'previewed' | 'saved' | 'already-saved',
   title: string,
-  path: string,           // preview 时为 ''；save 后为相对工作区的路径
+  path: string,           // 完整版路径；preview 时为 ''
+  textPath: string,       // 文字版路径；preview / 失败时为空
   markdown: string,       // 仅 preview 返回，按 notePreviewMaxChars 截断
   facts: { total, passed, skipped, remaining, images: { included, skipped }, redactions },
-  bytes: number,          // save 后实际写入的 UTF-8 字节数
+  bytes: number,          // 完整版字节数
+  textBytes: number,      // 文字版字节数
 }
 ```
 
-`presentationMeta` 必须带 `{ coachTool: 'coach_note', mode, status, title, path, images, bytes }`，否则重启后状态块不知道记录存在过。
+`presentationMeta` 必须带 `{ coachTool: 'coach_note', mode, status, title, path, textPath, images, bytes }`，否则重启后状态块不知道记录存在过。
 
 ### 3.3 错误码
 
@@ -238,12 +245,17 @@ goal: 能在本地完成一次分支合并
 mode: learn
 session: 3f2a9c1e
 stateVersion: 12
+variant: "full"
 generatedAt: 2026-11-13T21:41:00+01:00
 generator: coach-mode 0.5.0
+agentRead: "2026-11-13-2141-git-text.md"
 redactions: 0
 ---
 
 # Git 入门 · 学习记录
+
+> **给 agent**：本文件内嵌 base64 图片，**不要用 `read` 读取**；请改读同目录的 `2026-11-13-2141-git-text.md`（纯文字版）。
+> 给人类：图片已内嵌，直接打开即可。
 
 > 事实区由插件从会话日志计算，解释区由模型撰写。含屏幕截图，请勿提交到公共仓库。
 
@@ -273,6 +285,9 @@ redactions: 0
 ![用户截图 1](data:image/png;base64,…)
 ```
 
+**文字版**同结构，但：`variant: "text"`、`full: "2026-11-13-2141-git.md"`，开头提醒
+「可安全读取，完整版不要 read」，证据段只写「图片见完整版 `…-git.md`」，**零 base64**。
+
 ### 6.2 格式硬规则
 
 - UTF-8、LF、文件以单个换行结尾。
@@ -299,7 +314,7 @@ redactions: 0
 ```js
 initialState = {
   // …
-  notes: [],            // { title, path, status: 'preview'|'saved', at, images, bytes, redactions }
+  notes: [],            // { title, status, at, path, textPath, images, bytes, textBytes, redactions }
   // userArtifacts 已在 v0.4.5 落地（{ id, kind, at }），本档直接复用，不再新增字段。
 }
 ```
@@ -334,7 +349,7 @@ initialState = {
 ```text
 【记录】未生成（可用 coach_note 预览；保存前需用户确认）
 【记录】有 1 份预览未保存（保存前需用户确认）
-【记录】已生成 2 份，最近 2026-11-13-2141-git.md
+【记录】已生成 2 份，文字版 2026-11-13-2141-git-text.md
 ```
 
 ---
@@ -374,6 +389,8 @@ config.js           新增 notesDir / note* 上限
   - 用户同意 → 先 `coach_note(mode:"preview")`，把预览的要点贴在对话里，问「确认保存吗？」；用户确认后才 `mode:"save"`。
 - **不许声称已保存**，除非工具返回 `status: "saved"`。
 - 记录只写「这次会话发生了什么」，**不写用户本该自己完成的产物**（代码、配置、作业答案）。
+- 保存后会得到两份：`foo.md`（完整版，给用户看）与 `foo-text.md`（文字版，给你读）。
+  **不要用 `read` 读完整版**（会灌入 base64）；需要回顾时读文字版。
 - 绝不为了写记录去用 `write` / `edit` / `pwsh` / `bash`。
 
 ### 9.2 状态块
@@ -423,8 +440,11 @@ config.js           新增 notesDir / note* 上限
 | A17-17 | `write` / `edit` / `apply_patch` | 仍被守卫拒绝（回归） |
 | A17-18 | 渲染同一状态两次 | 逐字节相同（`now` 固定） |
 
-A17-1 – A17-18 已由单测覆盖；实机验收留空：`A17-19`（COMPLETE 提议一次后不再重复）、
-`A17-20`（用户拒绝后不写）。
+| A17-21 | `save` | 同时生成 `foo.md` 与 `foo-text.md`；文字版零 `data:image`，并指路完整版 |
+| A17-22 | 教练会话 `read` | `read foo.md` 被守卫拒绝并指出 `foo-text.md`；`read foo-text.md` 放行 |
+
+A17-1 – A17-22 已由单测覆盖；实机验收留空：`A17-23`（COMPLETE 提议一次后不再重复）、
+`A17-24`（用户拒绝后不写）。
 
 ---
 
@@ -456,6 +476,8 @@ A17-1 – A17-18 已由单测覆盖；实机验收留空：`A17-19`（COMPLETE �
 | `notesDir` 被用户配到工作区外 | `fs.contains` 拒绝 |
 | 只读会话被绕过 | 必须传 `sandboxPolicy`；测试覆盖 |
 | 预览内容很长，贴进对话占 token | `notePreviewMaxChars` 截断，并提示「完整内容保存后可看」 |
+| 其它 preset / 外部工具 `read` 完整版 | 守卫只在教练会话生效；文字版给它们兜底，但无法强制 |
+| 用户只想要一个文件 | 完整版仍是一份自包含 md；文字版是 sidecar，可忽略 |
 
 ---
 

@@ -175,9 +175,11 @@ export function applyNote(state, input, at, config = {}) {
       title,
       status: 'saved',
       path: typeof input?.path === 'string' ? input.path : '',
+      textPath: typeof input?.textPath === 'string' ? input.textPath : '',
       at: typeof at === 'number' ? at : 0,
       images: Number.isInteger(input?.images) && input.images > 0 ? input.images : 0,
       bytes: Number.isInteger(input?.bytes) && input.bytes > 0 ? input.bytes : 0,
+      textBytes: Number.isInteger(input?.textBytes) && input.textBytes > 0 ? input.textBytes : 0,
       redactions: Number.isInteger(input?.redactions) && input.redactions > 0 ? input.redactions : 0,
     })
   }

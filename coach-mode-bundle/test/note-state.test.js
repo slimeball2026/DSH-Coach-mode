@@ -85,15 +85,19 @@ test('v0.5 note 状态：preview → 用户确认 → save 成功', () => {
     mode: 'save',
     title: TITLE,
     path: '.coach/notes/x.md',
+    textPath: '.coach/notes/x-text.md',
     images: 2,
     bytes: 1234,
+    textBytes: 345,
     redactions: 1,
   }, 22, CONFIG)
   const saved = state.notes.filter((note) => note.status === 'saved')
   assert.equal(saved.length, 1)
   assert.equal(saved[0].path, '.coach/notes/x.md')
+  assert.equal(saved[0].textPath, '.coach/notes/x-text.md')
   assert.equal(saved[0].images, 2)
   assert.equal(saved[0].bytes, 1234)
+  assert.equal(saved[0].textBytes, 345)
   assert.equal(saved[0].redactions, 1)
 })
 

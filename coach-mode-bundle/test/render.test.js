@@ -447,7 +447,13 @@ test('v0.5 状态块：有预览未保存 / 已保存的文案', () => {
 
   const saved = {
     ...planned(),
-    notes: [{ title: 'T', status: 'saved', path: '.coach/notes/a.md', at: 22 }],
+    notes: [{
+      title: 'T',
+      status: 'saved',
+      path: '.coach/notes/a.md',
+      textPath: '.coach/notes/a-text.md',
+      at: 22,
+    }],
   }
-  assert.match(renderStateBlock(saved), /【记录】已生成 1 份，最近 \.coach\/notes\/a\.md/)
+  assert.match(renderStateBlock(saved), /【记录】已生成 1 份，文字版 \.coach\/notes\/a-text\.md/)
 })

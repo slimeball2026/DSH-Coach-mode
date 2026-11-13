@@ -18,6 +18,10 @@
 - **图片**：只收用户消息里的附件；`includeCoachShots:true` 才加插件成功截图；
   以 data URI 内嵌（宿主 fs 无二进制写），单张/总量/整份都有上限；
   读不到或超限留占位符，不静默丢。
+- **完整版 + 文字版**：`save` 同时写 `foo.md`（含 base64，给用户看）与
+  `foo-text.md`（零 base64，给 agent 读）；两份开头都有 agent 提醒。
+- **读守卫**：教练会话里 `read` 命中完整版记录时拒绝，并指向同目录文字版；
+  文字版 / 其它文件不受影响。
 - **脱敏**：渲染后替换高置信度密钥，front matter 记 `redactions`；只处理文字区，不碰 base64。
 - 状态块新增【记录】（未生成 / 有预览未保存 / 已生成 N 份）；人设在 COMPLETE 提议一次。
 
@@ -25,11 +29,12 @@
 - `stateVersion` **11 → 12**（新增 `notes`）；工具 **8 → 9**；`package.json` 0.5.0。
 - `userArtifacts` 现在保存附件完整引用（id/mediaType/bytes/width/height），供记录读图。
 - 截图 `shot` 元数据新增 `mediaType` / `bytes`（可选字段，旧记录归空/0）。
-- 单测 **204 → 238**（`note.test.js` / `note-state.test.js` / `note-tool.test.js`）。
+- 单测 **204 → 243**（`note.test.js` / `note-state.test.js` / `note-tool.test.js` / 守卫的 read 用例）。
 
 ### 模拟产物
 - `_ref/demo-note.mjs`：造会话 → preview → 用户确认 → save，真实落盘；
-  产物 `_ref/coach-note-demo.md`（内嵌 2 张 960×600 PNG）。
+  产物 `_ref/coach-note-demo.md`（完整版，内嵌 2 张 960×600 PNG）与
+  `_ref/coach-note-demo-text.md`（文字版，零 base64）。
 - `_ref/demo-assets/generate.py`：生成模拟截图；之前 96×64 的占位图在预览里太小，
   现在按真实窗口比例出图。
 

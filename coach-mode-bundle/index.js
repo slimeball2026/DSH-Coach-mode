@@ -12,7 +12,7 @@
  */
 
 import { resolveCoachConfig } from './config.js'
-import { coachGuard } from './guard.js'
+import { createCoachGuard } from './guard.js'
 import { registerStateBlock } from './inject.js'
 import { createProjection } from './projection.js'
 import { createAdvanceTool } from './tools/coach-advance.js'
@@ -62,7 +62,7 @@ export function apply(ctx, config) {
   registerStateBlock(ctx, deps)
 
   // 不代做：write / edit 确定性拒绝。
-  ctx.tools.guard(coachGuard)
+  ctx.tools.guard(createCoachGuard(resolved))
 
   // 九个教练工具。
   for (const [, create] of TOOL_FACTORIES) {

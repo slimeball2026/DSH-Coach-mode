@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { GUARDED_TOOLS, coachGuard } from '../guard.js'
+import { GUARDED_TOOLS, coachGuard, createCoachGuard, textNotePathOf } from '../guard.js'
 
 test('守卫：三个写入口都被拒，且拒绝理由包含工具名', () => {
   for (const name of ['write', 'edit', 'apply_patch']) {
@@ -33,4 +33,46 @@ test('守卫：畸形 execution 不抛错（fail-open 但不崩）', () => {
 
 test('守卫：apply_patch 在名单里（防 preset 变更后漏掉）', () => {
   assert.deepEqual([...GUARDED_TOOLS].sort(), ['apply_patch', 'edit', 'write'])
+})
+
+test('v0.5 守卫：read 完整记录被拒，并指向文字版；文字版放行', () => {
+  const guard = createCoachGuard({ notesDir: '.coach/notes' })
+  const agent = { session: { header: { cwd: '/work' } } }
+  const deny = guard({
+    name: 'read',
+    arguments: { file_path: '.coach/notes/2026-11-13-2141-git.md' },
+    agent,
+  })
+  assert.equal(typeof deny, 'string')
+  assert.match(deny, /2026-11-13-2141-git-text\.md/)
+  assert.match(deny, /base64/)
+  assert.match(deny, /不要/)
+
+  // 文字版放行
+  assert.equal(guard({
+    name: 'read',
+    arguments: { file_path: '.coach/notes/2026-11-13-2141-git-text.md' },
+    agent,
+  }), undefined)
+
+  // 记录目录之外放行
+  assert.equal(guard({ name: 'read', arguments: { file_path: 'src/main.js' }, agent }), undefined)
+  // 绝对路径同样拦
+  assert.ok(typeof guard({
+    name: 'read',
+    arguments: { file_path: '/work/.coach/notes/a.md' },
+    agent,
+  }) === 'string')
+})
+
+test('v0.5 守卫：notesDir 可配置', () => {
+  const guard = createCoachGuard({ notesDir: 'docs/notes' })
+  const agent = { session: { header: { cwd: '/work' } } }
+  assert.ok(typeof guard({ name: 'read', arguments: { file_path: 'docs/notes/a.md' }, agent }) === 'string')
+  assert.equal(guard({ name: 'read', arguments: { file_path: '.coach/notes/a.md' }, agent }), undefined)
+})
+
+test('v0.5 守卫：textNotePathOf 保留后缀', () => {
+  assert.match(textNotePathOf('/work/.coach/notes/foo.md'), /foo-text\.md$/)
+  assert.match(textNotePathOf('/work/.coach/notes/foo-2.md'), /foo-2-text\.md$/)
 })

@@ -188,6 +188,11 @@ export function filenameFor(now, slug) {
   return `${stamp}-${slug}.md`
 }
 
+/** 完整版文件名 → 文字版文件名：`foo.md` → `foo-text.md`。 */
+export function textFilenameFor(filename) {
+  return String(filename).replace(/\.md$/i, '-text.md')
+}
+
 /** 某一步在记录里的状态：通过 / 跳过 / 未完成 / 未开始。 */
 export function stepStatus(state, sectionIndex, stepIndex) {
   const key = `${sectionIndex}:${stepIndex}`
@@ -288,6 +293,7 @@ function evidenceCell(step) {
 /** front matter。 */
 function renderFrontMatter(state, facts, title, redactions) {
   const now = facts.now instanceof Date && Number.isFinite(facts.now.getTime()) ? facts.now : null
+  const variant = facts.variant === 'text' ? 'text' : facts.preview === true ? 'preview' : 'full'
   const lines = [
     '---',
     `title: ${yamlString(title)}`,
@@ -297,16 +303,44 @@ function renderFrontMatter(state, facts, title, redactions) {
     `mode: ${yamlString(state.goalMode ?? 'learn')}`,
     `session: ${yamlString(facts.sessionId ?? '')}`,
     `stateVersion: ${Number.isInteger(state.stateVersion) ? state.stateVersion : 0}`,
+    `variant: "${variant}"`,
     `generatedAt: ${now === null ? '' : now.toISOString()}`,
     `generator: ${yamlString(facts.generator ?? NOTE_GENERATOR)}`,
-    `redactions: ${redactions}`,
-    '---',
   ]
+  if (variant === 'full' && typeof facts.textFilename === 'string' && facts.textFilename !== '') {
+    lines.push(`agentRead: ${yamlString(facts.textFilename)}`)
+  }
+  if (variant === 'text' && typeof facts.fullFilename === 'string' && facts.fullFilename !== '') {
+    lines.push(`full: ${yamlString(facts.fullFilename)}`)
+  }
+  lines.push(`redactions: ${redactions}`, '---')
   return lines.join('\n')
 }
 
-/** 证据段：已内嵌的图 + 未能内嵌的占位符。 */
-function renderEvidence(images, skippedImages, preview) {
+/**
+ * v0.5.0：文件开头的 agent 提醒。
+ *
+ * 这不是防线（真要 `read` 时提醒已经和 base64 一起进了上下文），只是给「只读前几行」
+ * 或其它工具一个明确指路；真正的拦截在 `guard.js` 的 `read` 拒绝里。
+ */
+function renderAgentNotice(facts, variant) {
+  if (variant === 'preview') return ''
+  const textName = typeof facts.textFilename === 'string' && facts.textFilename !== ''
+    ? `\`${facts.textFilename}\``
+    : '同目录的 `-text.md`'
+  const fullName = typeof facts.fullFilename === 'string' && facts.fullFilename !== ''
+    ? `\`${facts.fullFilename}\``
+    : '完整版'
+  if (variant === 'text') {
+    return `> **给 agent**：这是纯文字版，可安全读取。${fullName} 内嵌 base64 图片，**不要用 \`read\` 读取它**；\n`
+      + '> 需要看图片时请让用户打开完整版。'
+  }
+  return `> **给 agent**：本文件内嵌 base64 图片，**不要用 \`read\` 读取**；请改读同目录的 ${textName}（纯文字版）。\n`
+    + '> 给人类：图片已内嵌，直接打开即可。'
+}
+
+/** 证据段：完整版内嵌 data URI；文字版只指路；预览只留占位。 */
+function renderEvidence(images, skippedImages, preview, variant, fullFilename) {
   const lines = ['## 5. 证据']
   if (images.length === 0 && skippedImages.length === 0) {
     lines.push('（本记录没有内嵌图片）')
@@ -319,7 +353,12 @@ function renderEvidence(images, skippedImages, preview) {
         + `${image.method === 'printwindow' ? '，printwindow' : image.method === 'screen' ? '，screen' : ''}）`
       : `用户提供（seq ${image.at ?? '?'}）`
     lines.push('', `### 图 ${number} · ${source}`)
-    if (preview) {
+    if (variant === 'text') {
+      const reason = typeof fullFilename === 'string' && fullFilename !== ''
+        ? `图片见完整版 \`${fullFilename}\`。`
+        : '图片见同目录完整版。'
+      lines.push(`> ${reason}`)
+    } else if (preview) {
       lines.push(`> 〔图 ${number}：保存时内嵌，预览不展开 base64〕`)
     } else {
       const alt = image.source === 'coach' ? `教练截图 ${number}` : `用户截图 ${number}`
@@ -337,8 +376,9 @@ function renderEvidence(images, skippedImages, preview) {
  *
  * @param {object} state CoachState。
  * @param {object} payload `normalizeNoteInput` 的产物。
- * @param {object} facts `{ now, generator?, sessionId?, preview?, images?, skippedImages? }`。
- * @returns {{ markdown: string, filename: string, stats: object }}
+ * @param {object} facts `{ now, generator?, sessionId?, variant?, preview?, images?, skippedImages?,
+ *   fullFilename?, textFilename? }`。
+ * @returns {{ markdown: string, filename: string, textFilename: string, stats: object }}
  */
 export function renderNote(state, payload, facts = {}) {
   const stats = progressStats(state) ?? {
@@ -355,11 +395,21 @@ export function renderNote(state, payload, facts = {}) {
   const images = Array.isArray(facts.images) ? facts.images : []
   const skippedImages = Array.isArray(facts.skippedImages) ? facts.skippedImages : []
   const preview = facts.preview === true
+  const variant = preview ? 'preview' : facts.variant === 'text' ? 'text' : 'full'
 
   const body = []
   body.push(`# ${title}`)
   body.push('')
-  body.push('> 事实区由插件从会话日志计算，解释区由模型撰写。含屏幕截图，请勿提交到公共仓库。')
+  const notice = renderAgentNotice(facts, variant)
+  if (notice !== '') {
+    body.push(notice)
+    body.push('')
+  }
+  body.push(variant === 'text'
+    ? '> 事实区由插件从会话日志计算，解释区由模型撰写。本文件是纯文字版；完整版含截图。'
+    : variant === 'preview'
+      ? '> 预览：保存后才会生成完整版（含图）与文字版（零 base64）。'
+      : '> 事实区由插件从会话日志计算，解释区由模型撰写。含屏幕截图，请勿提交到公共仓库。')
   body.push('')
   body.push('## 1. 目标与结果')
   body.push(`- 原始目标：${clip(state.originalGoal ?? state.currentGoal ?? '（未记录）', 400)}`)
@@ -429,12 +479,14 @@ export function renderNote(state, payload, facts = {}) {
   const bodyRedacted = redactSecrets(bodyText)
   const redactions = titleRedacted.count + bodyRedacted.count
   const frontMatter = renderFrontMatter(state, facts, title, redactions)
-  const evidence = renderEvidence(images, skippedImages, preview)
+  const evidence = renderEvidence(images, skippedImages, preview, variant, facts.fullFilename)
   const markdown = `${frontMatter}\n\n${bodyRedacted.text}\n\n${evidence}\n`
+  const filename = filenameFor(facts.now, slugOf(state.toolName))
 
   return {
     markdown,
-    filename: filenameFor(facts.now, slugOf(state.toolName)),
+    filename,
+    textFilename: textFilenameFor(filename),
     stats: {
       total: stats.total,
       passed: stats.passed,

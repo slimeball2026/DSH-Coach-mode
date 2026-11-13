@@ -15,7 +15,9 @@
 > 把会话整理成 Markdown：事实区（进度/跳过/回退）由插件算，解释区（复盘/概念/踩坑/下一步）
 > 由模型写，用户截图内嵌成 data URI。必须 `preview` → 用户确认 → `save`；只能写 notesDir
 > （默认 `.coach/notes/`），只创建不覆盖，只读会话拒绝；图片只收用户附件，
-> `includeCoachShots:true` 才加教练自己的成功截图。`stateVersion` 11 → **12**；工具 **9** 个；单测 **238**。
+> `includeCoachShots:true` 才加教练自己的成功截图。
+> `save` 会写**两份**：`foo.md`（完整版，含 base64，给用户看）和 `foo-text.md`（零 base64，给 agent 读）；
+> 教练会话里 `read` 完整版会被守卫拒绝并指路文字版。`stateVersion` 11 → **12**；工具 **9** 个；单测 **243**。
 >
 > **0.4.5（2026-11-13）**：**评审修复轮**。七件事：
 > ① 随包的 `screenshotEnabled` 回到 `false`（此前误写成 `true`，与文档和 Config 默认值矛盾）；
@@ -207,7 +209,7 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 | `coach_research` | 联网检索并写检索缓存 | 阶段是 `COMPLETE` / 过渡态；宿主 `web` 服务不可用；`query` 为空 |
 | `coach_back` | 回到更早的某一步重做（同会话） | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY` / `PLAN`；目标不存在；目标不是更早的步骤（不能往前跳） |
 | `coach_pause` | 暂停 / 恢复（`action` 二选一，同会话） | `pause` 只在驻留阶段（`COMPLETE` 除外）；`resume` 只在 `PAUSED`；重复 pause / 无暂停时 resume 被拒 |
-| `coach_note` | 把会话整理成 Markdown 学习记录（预览 / 保存） | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY` / `PLAN` / `PAUSED`；`save` 没有同标题预览、或预览后用户没说话；笔记标题不一致；`notesDir` 越界；只读会话；超过 `noteMaxPerSession` / `noteMaxBytes` / 图片上限 |
+| `coach_note` | 把会话整理成 Markdown 学习记录（预览 / 保存；保存时同时写完整版与文字版） | 阶段是 `INIT` / `CHECK_TOOL_AVAILABILITY` / `PLAN` / `PAUSED`；`save` 没有同标题预览、或预览后用户没说话；笔记标题不一致；`notesDir` 越界；只读会话；超过 `noteMaxPerSession` / `noteMaxBytes` / 图片上限。另：教练会话 `read` 完整版会被守卫拒绝（改读 `-text.md`） |
 
 ### 安装分支（v0.3.3）
 
@@ -373,7 +375,7 @@ v0.4.5 起 PNG **只在附件里存一份**，不再写工作区 `.coach/shots/`
 【回退记录】  ← 有过回退时出现：最近回退到哪一步，以及旧证据/结论作废（v0.3.4）
 【进度摘要】  ← 已完成/跳过/剩余、当前板块、本步失败、检索次数（v0.4.0）
 【支撑等级】  ← 1–3，由板块表现算出；只调【请执行】讲多细（v0.4.1）
-【记录】  ← 未生成 / 有预览未保存 / 已生成 N 份，最近路径（v0.5.0）
+【记录】  ← 未生成 / 有预览未保存 / 已生成 N 份，文字版路径（v0.5.0）
 【暂停位置】【暂停备注】  ← 只在 PAUSED 出现；暂停块不再给执行步骤
 【降级提示】  ← 只在 DEGRADED 出现
 【强制出口】  ← 只在失败次数达到阈值时出现
@@ -537,7 +539,7 @@ v0.4.4 抓取方式：PrintWindow 先于 CopyFromScreen、回退前必须检测�
 【安装分支·可早退】、【可用性判断】、【回退记录】、【进度摘要】、PAUSED 块）、
 `research.test.js`（脱敏、来源归一化、成功写缓存、失败降级）、
 `config.test.js`（默认只读白名单）、
-`guard.test.js`（v0.4.5 守卫：write/edit/apply_patch 拒绝，只读与 shell 放行，畸形输入不崩）、
+`guard.test.js`（守卫：write/edit/apply_patch 拒绝；v0.5.0 `read` 完整版记录被拒、文字版放行）、
 `check-tool.test.js`（v0.4.5 read_file：readFileMaxChars 回传长度、readFileMaxBytes 超限不读）、
 `plan-tool.test.js`（v0.4.5 screen 计划的平台前置：Linux/macOS 与截图关闭时受理前拒绝）、
 `note.test.js` / `note-state.test.js` / `note-tool.test.js`（v0.5.0：渲染结构/脱敏/图片选择、预览门/用户确认门/回退失效/预算、路径越界/只读/撞名/图片内嵌/幂等）、
@@ -639,6 +641,8 @@ node <本仓库路径>\_ref\smoke-coach.mjs
     只读会话拒绝；保存必须 preview → 用户确认 → save；回退会让预览作废。
     图片以 data URI 内嵌（宿主 fs 无二进制写），整份上限 `noteMaxBytes` 8 MiB、最多 3 张、
     单张 1 MiB；preview 不展开图片。记录是**产物**，不参与 `coach_verify` 的判定。
+    保存会写完整版 + 文字版两份；守卫只拦教练会话里对完整版的 `read`（其它 preset / 外部工具不受影响，
+    它们仍可能把 base64 读进上下文——这是文件格式本身的代价）。
 
 ## 十一、改哪里
 
@@ -660,7 +664,8 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 | 截图的配置项与默认值 | `config.js`（`CONFIG_DEFAULTS`） |
 | 学习记录的渲染 / 格式 / 图片选择 / 脱敏 | `core/note.js` |
 | 学习记录的预览门 / 用户确认门 / 预算 / 幂等 | `core/note-state.js` |
-| 学习记录的写盘 / 路径 / 读图 / 撞名 | `tools/coach-note.js` |
+| 学习记录的写盘 / 路径 / 读图 / 撞名 / 双文件 | `tools/coach-note.js` |
+| 学习记录完整版的 `read` 拦截 | `guard.js`（`createCoachGuard`） |
 | 工具的参数与描述 | `tools/*.js` |
 
 > **改 `cordis.patch.yml` 的两条纪律**

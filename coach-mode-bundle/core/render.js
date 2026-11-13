@@ -229,7 +229,8 @@ function noteLine(state) {
   const saved = notes.filter((note) => note?.status === 'saved')
   if (saved.length > 0) {
     const last = saved[saved.length - 1]
-    return `【记录】已生成 ${saved.length} 份，最近 ${clip(last.path || last.title || '', 80)}`
+    const readable = last.textPath || last.path || last.title || ''
+    return `【记录】已生成 ${saved.length} 份，文字版 ${clip(readable, 80)}`
   }
   if (notes.some((note) => note?.status === 'preview')) {
     return '【记录】有 1 份预览未保存（保存前需用户确认）'

@@ -17,9 +17,11 @@ import { defineTool } from './define-tool.js'
 import { CoachError } from '../core/machine.js'
 import {
   NOTE_GENERATOR,
+  filenameFor,
   normalizeNoteInput,
   renderNote,
   selectNoteImages,
+  slugOf,
 } from '../core/note.js'
 import {
   applyNote,
@@ -153,8 +155,10 @@ export function createNoteTool(deps) {
           status: { type: 'string', required: true },
           title: { type: 'string', required: true },
           path: { type: 'string', required: true },
+          textPath: { type: 'string' },
           markdown: { type: 'string' },
           bytes: { type: 'number', required: true },
+          textBytes: { type: 'number' },
           facts: {
             type: 'object',
             required: true,
@@ -191,14 +195,18 @@ export function createNoteTool(deps) {
           return [{
             type: 'text',
             text: `这份记录已经保存过：${value.path}（没有重复写）。\n`
+              + (value.textPath ? `文字版：${value.textPath}；要看内容读它，不要 read 完整版。\n` : '')
               + '直接告诉用户文件位置即可，不要写第二个文件。',
           }]
         }
         return [{
           type: 'text',
-          text: `已保存：${value.path}（${value.bytes} 字节，内嵌 ${value.facts.images.included} 张图，`
-            + `跳过 ${value.facts.images.skipped} 张，脱敏 ${value.facts.redactions} 处）。\n`
-            + '文件只创建不覆盖；回复用户时给出这个路径，并说明这是 Learn 记录而不是可交付成果。',
+          text: `已保存两个文件（都只创建不覆盖）：\n`
+            + `- 完整版（含图片，给用户看）：${value.path}\n`
+            + `- 文字版（零 base64，给你自己读）：${value.textPath}\n`
+            + `（${value.bytes} 字节 / 内嵌 ${value.facts.images.included} 张图 / 跳过 ${value.facts.images.skipped} 张 / `
+            + `脱敏 ${value.facts.redactions} 处）\n`
+            + '**不要用 read 读完整版**（会把 base64 读进上下文）；需要回顾请读文字版。',
         }]
       },
       presentationMeta: (_args, value) => ({
@@ -207,6 +215,7 @@ export function createNoteTool(deps) {
         status: value.status,
         title: value.title,
         path: value.path,
+        textPath: value.textPath ?? '',
         images: value.facts.images.included,
         bytes: value.bytes,
         redactions: value.facts.redactions,
@@ -269,7 +278,9 @@ export function createNoteTool(deps) {
           status: 'already-saved',
           title: payload.title,
           path: existing.path ?? '',
+          textPath: existing.textPath ?? '',
           bytes: existing.bytes ?? 0,
+          textBytes: existing.textBytes ?? 0,
           facts: {
             total: 0,
             passed: 0,
@@ -346,42 +357,76 @@ export function createNoteTool(deps) {
         })
       }
 
-      const rendered = renderNote(state, payload, {
-        now: new Date(),
-        generator: NOTE_GENERATOR,
-        sessionId: sessionIdOf(exec),
-        preview: false,
-        images,
-        skippedImages,
-      })
-      const bytes = Buffer.byteLength(rendered.markdown, 'utf8')
-      if (bytes > config.noteMaxBytes) {
-        throw new CoachError(
-          `记录有 ${bytes} 字节，超过 noteMaxBytes（${config.noteMaxBytes}）。`
-            + '请减少图片或缩短解释区；不要静默截断事实。',
-          'COACH_NOTE_TOO_LARGE',
-        )
-      }
-
-      // 文件名冲突：createIfAbsent 会报 FS_NOT_OBSERVED；依次试 -2…-10，绝不覆盖。
-      const baseName = rendered.filename
-      const stem = baseName.replace(/\.md$/i, '')
+      const now = new Date()
+      const sessionId = sessionIdOf(exec)
+      const baseFullName = filenameFor(now, slugOf(state.toolName))
+      const baseStem = baseFullName.replace(/\.md$/i, '')
       let written
       let lastError
       for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt += 1) {
-        const name = attempt === 0 ? baseName : `${stem}-${attempt + 1}.md`
-        const target = await fs.resolve(path.join(notesDir, name), { cwd })
-        if (typeof fs.contains === 'function' && !fs.contains(root, target)) {
+        const suffix = attempt === 0 ? '' : `-${attempt + 1}`
+        const fullName = `${baseStem}${suffix}.md`
+        const textName = `${baseStem}${suffix}-text.md`
+        const names = { fullFilename: fullName, textFilename: textName }
+
+        const full = renderNote(state, payload, {
+          now,
+          generator: NOTE_GENERATOR,
+          sessionId,
+          variant: 'full',
+          images,
+          skippedImages,
+          ...names,
+        })
+        const text = renderNote(state, payload, {
+          now,
+          generator: NOTE_GENERATOR,
+          sessionId,
+          variant: 'text',
+          images,
+          skippedImages,
+          ...names,
+        })
+        const fullBytes = Buffer.byteLength(full.markdown, 'utf8')
+        const textBytes = Buffer.byteLength(text.markdown, 'utf8')
+        if (fullBytes > config.noteMaxBytes || textBytes > config.noteMaxBytes) {
+          throw new CoachError(
+            `记录有 ${Math.max(fullBytes, textBytes)} 字节，超过 noteMaxBytes（${config.noteMaxBytes}）。`
+              + '请减少图片或缩短解释区；不要静默截断事实。',
+            'COACH_NOTE_TOO_LARGE',
+          )
+        }
+
+        const fullTarget = await fs.resolve(path.join(notesDir, fullName), { cwd })
+        const textTarget = await fs.resolve(path.join(notesDir, textName), { cwd })
+        if (typeof fs.contains === 'function'
+          && (!fs.contains(root, fullTarget) || !fs.contains(root, textTarget))) {
           throw new CoachError('记录路径解析后不在 notesDir 内，拒绝写入。', 'COACH_NOTE_PATH')
         }
+
         try {
-          await fs.writeText(target, rendered.markdown, { kind: 'createIfAbsent' }, exec?.signal, policy)
-          written = { name, target }
-          break
+          await fs.writeText(fullTarget, full.markdown, { kind: 'createIfAbsent' }, exec?.signal, policy)
         } catch (error) {
           lastError = error
-          if (error?.code !== 'FS_NOT_OBSERVED') break
+          if (error?.code === 'FS_NOT_OBSERVED') continue
+          break
         }
+        try {
+          await fs.writeText(textTarget, text.markdown, { kind: 'createIfAbsent' }, exec?.signal, policy)
+        } catch (error) {
+          lastError = error
+          // 两个文件要么都在、要么都不在；回滚已经写下的完整版。
+          try {
+            if (typeof fs.deleteFile === 'function') await fs.deleteFile(fullTarget, undefined, exec?.signal, policy)
+          } catch {
+            // 回滚失败就留下完整版，但这次视为失败，让用户看到错误。
+          }
+          if (error?.code === 'FS_NOT_OBSERVED') continue
+          break
+        }
+
+        written = { fullName, textName, fullBytes, textBytes, stats: full.stats }
+        break
       }
       if (written === undefined) {
         throw new CoachError(
@@ -392,20 +437,21 @@ export function createNoteTool(deps) {
       }
 
       // 用我们构造的相对路径，而不是后端的 targetKey（远端后端不保证它是文件路径）。
-      const relativePath = path.posix.join(notesDir, written.name)
       return {
         mode: 'save',
         status: 'saved',
         title: payload.title,
-        path: relativePath,
-        bytes,
+        path: path.posix.join(notesDir, written.fullName),
+        textPath: path.posix.join(notesDir, written.textName),
+        bytes: written.fullBytes,
+        textBytes: written.textBytes,
         facts: {
-          total: rendered.stats.total,
-          passed: rendered.stats.passed,
-          skipped: rendered.stats.skipped,
-          remaining: rendered.stats.remaining,
+          total: written.stats.total,
+          passed: written.stats.passed,
+          skipped: written.stats.skipped,
+          remaining: written.stats.remaining,
           images: { included: images.length, skipped: skippedImages.length },
-          redactions: rendered.stats.redactions,
+          redactions: written.stats.redactions,
         },
       }
     },

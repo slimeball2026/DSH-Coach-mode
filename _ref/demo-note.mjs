@@ -16,6 +16,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BUNDLE = path.join(HERE, '..', 'coach-mode-bundle')
 const DEMO_DIR = path.join(HERE, 'demo-output')
 const OUT = path.join(HERE, 'coach-note-demo.md')
+const OUT_TEXT = path.join(HERE, 'coach-note-demo-text.md')
 
 const { initialState } = await import(path.join(BUNDLE, 'core/machine.js'))
 const { applyPlan, normalizeSections } = await import(path.join(BUNDLE, 'core/plan.js'))
@@ -54,6 +55,9 @@ function demoFs(root) {
         }
         throw error
       }
+    },
+    async deleteFile(target) {
+      await rm(target.targetKey, { force: true })
     },
   }
 }
@@ -209,19 +213,29 @@ state = applyUserFeedback(state, '可以，保存吧', 21, {})
 
 const saved = await tool.execute({ mode: 'save', ...payload }, exec)
 if (saved.status !== 'saved') throw new Error(`save failed: ${saved.status}`)
-console.log(`saved: ${saved.path}（${saved.bytes} 字节，图片 ${saved.facts.images.included} 张）`)
+console.log(`saved full: ${saved.path}（${saved.bytes} 字节，图片 ${saved.facts.images.included} 张）`)
+console.log(`saved text: ${saved.textPath}（${saved.textBytes} 字节，零 base64）`)
 
-// ── 4. 校验产物并复制一份到固定路径 ────────────────────────────────────────
-const writtenPath = path.join(DEMO_DIR, saved.path)
-const markdown = await readFile(writtenPath, 'utf8')
+// ── 4. 校验两个产物并复制到固定路径 ────────────────────────────────────────
+const fullPath = path.join(DEMO_DIR, saved.path)
+const textPath = path.join(DEMO_DIR, saved.textPath)
+const markdown = await readFile(fullPath, 'utf8')
+const textMarkdown = await readFile(textPath, 'utf8')
 const images = (markdown.match(/data:image\/png;base64,/g) ?? []).length
 if (images !== 2) throw new Error(`expected 2 embedded images, got ${images}`)
 if (!markdown.includes('## 5. 证据')) throw new Error('missing evidence section')
+if (textMarkdown.includes('data:image')) throw new Error('text twin must not embed base64')
+if (!textMarkdown.includes('不要用 `read` 读取它')) throw new Error('text twin missing agent warning')
 
-await copyFile(writtenPath, OUT)
-const info = await stat(OUT)
-console.log(`copied: ${OUT}（${info.size} 字节）`)
-console.log('--- 产物结构 ---')
+await copyFile(fullPath, OUT)
+await copyFile(textPath, OUT_TEXT)
+const fullInfo = await stat(OUT)
+const textInfo = await stat(OUT_TEXT)
+console.log(`copied: ${OUT}（${fullInfo.size} 字节）`)
+console.log(`copied: ${OUT_TEXT}（${textInfo.size} 字节）`)
+console.log('--- 完整版结构 ---')
 for (const line of markdown.split('\n')) {
   if (line.startsWith('#') || line.startsWith('| 1 ') || line.startsWith('### 图')) console.log(line)
 }
+console.log('--- 文字版开头 ---')
+console.log(textMarkdown.split('\n').slice(0, 16).join('\n'))
