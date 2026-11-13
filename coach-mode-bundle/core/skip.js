@@ -19,6 +19,12 @@ import { CoachError, assertPhase, currentStep, phaseLabel } from './machine.js'
 /** 用户没说明原因时的占位文本（SPEC 第 9 节）。 */
 export const UNSPECIFIED_REASON = '用户未说明'
 
+/** v0.4.5：状态里保留的用户附件 id 上限。 */
+export const MAX_USER_ARTIFACTS = 20
+
+/** v0.4.5：状态里保留的用户原话上限（字符）。 */
+export const MAX_USER_TEXT = 20000
+
 /** `coach_skip` 允许的阶段。 */
 export const SKIP_ALLOWED_PHASES = ['WAIT_FEEDBACK', 'INSTALL_TOOL', 'VERIFY_DONE', 'DEGRADED']
 
@@ -82,19 +88,44 @@ export function bumpCurrentStepFailure(state) {
  *
  * v0.4.3：无论阶段如何，都会把 `lastUserFeedbackAt` 更新成这条消息的序号——
  * `screen` 证据判「通过」要用它确认「截图是用户这次反馈之后抓的」。
+ *
+ * v0.4.5：带图片/文件附件、但没有文字的回复**不算零信息**。截图是本插件最主要的
+ * 证据形式，之前空文本会被 `isNoInfoFeedback('')` 判成 true，用户按格式只回一张图
+ * 反而被记一次失败，三次就触发强制出口。
  * @param {object} state 当前状态。
- * @param {string} text 用户回复。
+ * @param {string} text 用户回复的文本部分。
  * @param {number} at 该条消息的事件序号。
+ * @param {{ hasMedia?: boolean, artifacts?: Array<{ id: string, kind: string, at: number|null }> }} [options]
+ *   这条消息是否带图片/文件附件；`artifacts` 是附件 id，写进状态供工质校验。
  * @returns {object} 新状态（未计入时原样返回）。
  */
-export function applyUserFeedback(state, text, at) {
-  const stamped = typeof at === 'number' && state.lastUserFeedbackAt !== at
+export function applyUserFeedback(state, text, at, options = {}) {
+  const artifacts = Array.isArray(options?.artifacts) ? options.artifacts : []
+  const textValue = String(text ?? '')
+  let stamped = typeof at === 'number' && state.lastUserFeedbackAt !== at
     ? { ...state, lastUserFeedbackAt: at }
     : state
+
+  // v0.4.5：不管当前阶段能不能计数，用户说过什么、发过什么都要留在状态里。
+  // `user_artifact` 判「通过」要靠它校验工质来源。
+  if (textValue.trim() !== '') {
+    const previous = typeof stamped.userText === 'string' ? stamped.userText : ''
+    stamped = { ...stamped, userText: `${previous}\n${textValue}`.slice(-MAX_USER_TEXT) }
+  }
+  const validArtifacts = artifacts.filter(
+    (entry) => entry !== null && typeof entry === 'object'
+      && typeof entry.id === 'string' && entry.id !== '',
+  )
+  if (validArtifacts.length > 0) {
+    const previous = Array.isArray(stamped.userArtifacts) ? stamped.userArtifacts : []
+    stamped = { ...stamped, userArtifacts: [...previous, ...validArtifacts].slice(-MAX_USER_ARTIFACTS) }
+  }
+
   if (!COUNTING_PHASES.includes(stamped.phase)) return stamped
   if (currentStep(stamped) === undefined) return stamped
-  if (!isNoInfoFeedback(text)) {
-    // 有信息的反馈：清掉待认领标记，避免和后面的判定串在一起。
+  const mediaOnly = options?.hasMedia === true && String(text ?? '').trim() === ''
+  if (mediaOnly || !isNoInfoFeedback(text)) {
+    // 有信息（或有附件）的反馈：清掉待认领标记，避免和后面的判定串在一起。
     return stamped.pendingNoInfoAt === null ? stamped : { ...stamped, pendingNoInfoAt: null }
   }
   const bumped = bumpCurrentStepFailure(stamped)

@@ -358,3 +358,40 @@ test('折叠 v0.4.0 暂停/恢复：PAUSED 可重折，resume 回到原阶段', 
   assert.equal(resumed.phase, 'WAIT_FEEDBACK')
   assert.equal(resumed.pauses[0].resumedAt, 5)
 })
+
+// ── v0.4.5：附件反馈的折叠 ─────────────────────────────────────────────────
+
+test('v0.4.5 foldEvents：只发截图、没有文字的用户消息不计失败', () => {
+  const events = [
+    call(0, 'c1', 'coach_plan', PLAN_ARGS),
+    result(1, 'c1'),
+    {
+      type: 'user/message',
+      seq: 2,
+      data: {
+        source: { kind: 'user' },
+        content: [{ type: 'image', attachment: { attachmentId: 'att-1' } }],
+      },
+    },
+  ]
+  const state = foldEvents(null, events, CONFIG)
+  assert.equal(state.phase, 'WAIT_FEEDBACK')
+  assert.equal(state.plan[0].steps[0].failedAttempts, 0)
+  assert.equal(state.lastUserFeedbackAt, 2)
+  assert.equal(state.pendingNoInfoAt, null)
+})
+
+test('v0.4.5 foldEvents：纯文字「还是不行」仍然计失败', () => {
+  const events = [
+    call(0, 'c1', 'coach_plan', PLAN_ARGS),
+    result(1, 'c1'),
+    {
+      type: 'user/message',
+      seq: 2,
+      data: { source: { kind: 'user' }, content: [{ type: 'text', text: '还是不行' }] },
+    },
+  ]
+  const state = foldEvents(null, events, CONFIG)
+  assert.equal(state.plan[0].steps[0].failedAttempts, 1)
+  assert.equal(state.pendingNoInfoAt, 2)
+})

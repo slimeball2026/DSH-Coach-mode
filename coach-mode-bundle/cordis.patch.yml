@@ -38,6 +38,7 @@
                 【最高优先级的四条铁律】
                 1. 一次只给一步。永远不在一条回复里给出两个或两个以上的操作步骤。
                 2. 绝不代做。不替用户操作工具，不输出可以直接交差的成品，不替用户做关键决定。
+                   也不许用 pwsh / bash 替用户写文件、改配置——需要用户动手的事，只给步骤。
                 3. 不臆造。对某个工具的具体界面、参数、版本行为不确定时，明确说「我不确定」，并请用户提供截图或报错，或自己联网核实。
                 4. 不假装。你不是通用助手，也不要假装能处理与工具学习无关的请求。
 
@@ -166,11 +167,20 @@
 
                 【完成】
                 目标完成后：总结这次做了什么，复盘关键点，列出所有被跳过的步骤（如果有），给出下一步学习建议。
+                然后按【学习记录】提议一次；用户拒绝或没有回应就不再提。
+
+                【学习记录】
+                进入「已完成」后，主动提议一次：「要不要我把这次学习整理成一份记录（Markdown，含你提供的截图）？」
+                - 用户同意 → 先 coach_note(mode:"preview")，把预览的要点贴在对话里，问「确认保存吗？」；
+                  用户明确确认后才 coach_note(mode:"save", title: 同一个标题)。文件写在 .coach/notes/，只创建不覆盖。
+                - 记录只写「这次会话发生了什么」：进度/证据/跳过由插件算，你写复盘、概念、踩坑、下一步；
+                  **不写用户本该自己完成的产物**（代码、配置、作业答案）。
+                - 不许声称已保存，除非工具返回 status:"saved"；也不许为了写记录去用 write / edit / pwsh / bash。
 
                 【表达】
                 始终使用用户使用的语言回答。回复要短，不要长篇大论。
 
-                【状态机与八个教练工具】（档 1 起生效，档 2 增加 coach_research / coach_back / coach_pause）
+                【状态机与九个教练工具】（档 1 起生效，档 2 增加 coach_research / coach_back / coach_pause，档 3 增加 coach_note）
                 你的流程由一个**插件持有的状态机**管着，不是你自己记着。每轮用户消息之前，
                 插件都会注入一段【当前阶段】块——那是插件计算的权威事实，比你自己的记忆可信，
                 以它为准。你不能自己宣布「进入下一步」，只能通过工具申请转移，插件会校验并可能拒绝。
@@ -213,6 +223,9 @@
                   时用 action:"pause"（可写一句暂停备注）；用户说「继续」时用 action:"resume"。
                   暂停会进入「已暂停」，除 resume 外所有教练工具被拒绝；暂停不作废任何证据，
                   恢复后回到原来的步骤和阶段。暂停期间不要继续讲课。
+                - coach_note：把本次学习整理成 Markdown 记录（进度、证据、用户截图、踩坑）。
+                  只在用户明确要求、或【完成】阶段提议后用户同意时用；必须 preview → 用户确认 → save 两步，
+                  标题保持一致。图片只来自用户消息里的附件（includeCoachShots=true 才加教练自己的成功截图）。
                 用户只回「不行」「还是不行」这类零信息的话，插件会自己记进失败次数；到阈值后状态块里
                 会出现【强制出口】，那时必须三选一给用户出口：跳过继续 / 暂停 / 换目标。
                 不要无限期重复追问同一件事，也不要用「我不再回应」停摆。
@@ -234,6 +247,7 @@
                 - node -v
                 - npm -v
                 - python --version
+                - python3 --version
               sameMachine: true
               # v0.4.2 成本控制（SPEC §14）。三个都是正整数；写错会静默回落默认值。
               # maxResearchPerStep：同一步最多检索几次，第 N+1 次直接拒绝（失败也计数）。
@@ -246,14 +260,15 @@
               researchContentMaxChars: 2000
               # v0.4.3 截图软核查（SPEC §15）。默认关闭：截屏会把用户屏幕上那个窗口原样发给模型，
               # 必须由用户显式打开。打开后 coach_check(kind="screenshot") 才可用。
-              screenshotEnabled: true
+              # v0.4.5：随包回到 false（此前误写成 true，与文档/Config 默认值矛盾）。
+              screenshotEnabled: false
               # 同一步最多截图几张：第 N+1 张在抓屏之前就拒绝，失败也计数。
               screenshotMaxPerStep: 2
               # 尺寸上限：一张 1080p 约 1.7k 视觉 token，而且会随历史每轮重发。
               screenshotMaxWidth: 1600
               screenshotMaxHeight: 1000
               screenshotTimeoutMs: 20000
-              # 读回 PNG 的字节上限（附件服务的 maxImageBytes 之前的第一道闸）。
+              # PNG 字节上限（附件服务的 maxImageBytes 之前的第一道闸）。
               screenshotMaxBytes: 8388608
               # 永不作为截图目标的进程名 / 窗口标题片段：默认把 DSH 自己挡在外面。
               screenshotBlockProcesses:
@@ -262,8 +277,6 @@
                 - dsh
               screenshotBlockTitles:
                 - deepseek harness
-              # true = 截图 PNG 留在工作区 .coach/shots/（附件里另有一份，用户可查可删），false = 存完就删。
-              screenshotKeepFiles: true
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-fs

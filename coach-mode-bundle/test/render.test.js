@@ -12,7 +12,7 @@ import { applyAdvance, applyCheck, applyVerify } from '../core/verify.js'
 import { applyBack } from '../core/back.js'
 import { applyPause } from '../core/pause.js'
 import { applyResearch } from '../core/research.js'
-import { applySkip } from '../core/skip.js'
+import { applySkip, applyUserFeedback } from '../core/skip.js'
 
 /** 两步骤计划。 */
 function planned() {
@@ -420,4 +420,40 @@ test('v0.4.0 PAUSED 块只显示暂停信息，不显示执行步骤', () => {
   assert.ok(!block.includes('【请执行】'), '暂停时不要继续给执行步骤')
   assert.ok(!block.includes('【合格标准】'))
   assert.ok(!block.includes('【核查结论】'))
+})
+
+test('v0.4.5 状态块：列出用户附件 id，供 user_artifact 引用', () => {
+  let state = planned()
+  state = applyUserFeedback(state, '截图我发你了', 20, {
+    artifacts: [{ id: 'att-user-1', kind: 'image', at: 20 }],
+  })
+  const block = renderStateBlock(state)
+  assert.match(block, /【用户工质】att-user-1/)
+  assert.match(block, /image，seq 20/)
+})
+
+// ── v0.5：状态块的【记录】行 ────────────────────────────────────────────────
+
+test('v0.5 状态块：到 COMPLETE 且没有记录时提示可生成', () => {
+  const state = { ...planned(), phase: 'COMPLETE' }
+  const block = renderStateBlock(state)
+  assert.match(block, /【记录】未生成/)
+  assert.match(block, /coach_note/)
+})
+
+test('v0.5 状态块：有预览未保存 / 已保存的文案', () => {
+  const preview = { ...planned(), notes: [{ title: 'T', status: 'preview', at: 20 }] }
+  assert.match(renderStateBlock(preview), /【记录】有 1 份预览未保存/)
+
+  const saved = {
+    ...planned(),
+    notes: [{
+      title: 'T',
+      status: 'saved',
+      path: '.coach/notes/a.md',
+      textPath: '.coach/notes/a-text.md',
+      at: 22,
+    }],
+  }
+  assert.match(renderStateBlock(saved), /【记录】已生成 1 份，文字版 \.coach\/notes\/a-text\.md/)
 })

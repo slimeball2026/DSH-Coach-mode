@@ -2,6 +2,89 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；`stateVersion` 是折叠语义的版本号，改它代表"旧会话要用新规则重新推导状态"。
 
+## [0.5.0] - 2026-11-13
+
+**新功能：学习记录 `coach_note`**（SPEC-档3）。第 9 个教练工具。
+
+### 新增
+- `coach_note({ mode, title, summary, concepts, pitfalls, nextSteps, includeCoachShots })`：
+  把本次会话整理成 Markdown（front matter + 目标/结果 + 学习路径表 + 关键概念 + 踩过的坑 + 证据）。
+- **事实区由插件写**：进度、跳过、回退、检索、证据目标都从 `CoachState` 算，模型入参里没有状态字段；
+  解释区（`summary` / `concepts` / `pitfalls` / `nextSteps`）才来自模型。
+- **两步保存**：`preview` 只渲染不落盘；`save` 必须晚于同标题预览、且预览之后有用户消息；
+  回退会让预览作废；同一标题重复保存（用户没再说话）返回 `already-saved`，不写第二份。
+- **路径与权限**：只能写 `notesDir`（默认 `.coach/notes/`），`fs.contains` 校验；
+  `createIfAbsent` 只创建不覆盖（撞名 `-2`…）；必须传会话 `sandboxPolicy`，只读会话拒绝。
+- **图片**：只收用户消息里的附件；`includeCoachShots:true` 才加插件成功截图；
+  以 data URI 内嵌（宿主 fs 无二进制写），单张/总量/整份都有上限；
+  读不到或超限留占位符，不静默丢。
+- **完整版 + 文字版**：`save` 同时写 `foo.md`（含 base64，给用户看）与
+  `foo-text.md`（零 base64，给 agent 读）；两份开头都有 agent 提醒。
+- **读守卫**：教练会话里 `read` 命中完整版记录时拒绝，并指向同目录文字版；
+  文字版 / 其它文件不受影响。
+- **脱敏**：渲染后替换高置信度密钥，front matter 记 `redactions`；只处理文字区，不碰 base64。
+- 状态块新增【记录】（未生成 / 有预览未保存 / 已生成 N 份）；人设在 COMPLETE 提议一次。
+
+### 变更
+- `stateVersion` **11 → 12**（新增 `notes`）；工具 **8 → 9**；`package.json` 0.5.0。
+- `userArtifacts` 现在保存附件完整引用（id/mediaType/bytes/width/height），供记录读图。
+- 截图 `shot` 元数据新增 `mediaType` / `bytes`（可选字段，旧记录归空/0）。
+- 单测 **204 → 243**（`note.test.js` / `note-state.test.js` / `note-tool.test.js` / 守卫的 read 用例）。
+
+### 模拟产物
+- `_ref/demo-note.mjs`：造会话 → preview → 用户确认 → save，真实落盘；
+  产物 `_ref/coach-note-demo.md`（完整版，内嵌 2 张 960×600 PNG）与
+  `_ref/coach-note-demo-text.md`（文字版，零 base64）。
+- `_ref/demo-assets/generate.py`：生成模拟截图；之前 96×64 的占位图在预览里太小，
+  现在按真实窗口比例出图。
+
+### 修复
+- 记录状态表：当前步骤与之前未通过的步骤标「未完成」，只有还没轮到的步骤才是「未开始」。
+
+## [0.4.5] - 2026-11-13
+
+**评审修复轮**（按 P0 → P1 → Linux/macOS → P2 的顺序）。行为有变化，装完要重启。
+
+### 修复（P0）
+- **截图默认关闭**：随包 `cordis.patch.yml` 从 `screenshotEnabled: true` 改回 `false`，与
+  `config.js` 默认值和 README 一致。
+- **截图不再写盘**：抓屏脚本把 PNG 编码成 base64 从 stdout 回传，适配层解码后直接进
+  `ctx.attachments`；去掉 PowerShell 的 `-ExecutionPolicy Bypass`，移除 `screenshotKeepFiles`
+  配置项与工作区 `.coach/shots/` 第二份副本。解码增加三重完整性校验：stdout `lossy` 检测、
+  脚本声明字节数与解码长度比对、PNG 文件签名校验——被截断的输出会明确报错，而不是把半张图
+  送进附件服务。
+- **守卫补 `apply_patch`**：`write` / `edit` / `apply_patch` 三个写入口都确定性拒绝；
+  人设明确禁止用 `pwsh` / `bash` 替用户写文件。
+
+### 修复（P1）
+- **纯图片/文件反馈不再误计失败**：`user/message` 带 image/file 块、文本为空时，
+  `applyUserFeedback` 不再按「零信息」+1，也不会触发强制出口。
+- **失败的核查不能判「通过」**：`file` / `command` 要求最近一条 `coach_check` 的 `ok === true`
+  （错误码 `COACH_VERIFY_CHECK_FAILED`），与截图口径对齐。
+- **相位校验先于副作用**：抽出 `preflightCheck`，`coach_check` 在截屏 / 跑命令 / 读文件之前
+  就拒绝非法阶段（PAUSED / COMPLETE 不再先截一张再报错）。
+- **`read_file` 加上限**：新增 `readFileMaxBytes`（默认 1 MiB），超过直接拒绝；回传长度按
+  `readFileMaxChars`，不再被 600 字预算砍半。
+
+### 修复（Linux / macOS）
+- 状态块只在 `win32` 显示【可截图】；旧会话里的 `screen` 步骤改为提示「截图不可用，请用户发截图」。
+- 计划受理前拒绝 `screen` 证据：非 Windows（`COACH_PLAN_PLATFORM_UNSUPPORTED`）或
+  `screenshotEnabled` 未开（`COACH_PLAN_SCREEN_DISABLED`），避免造出永远过不了的步骤。
+- 默认白名单补 `python3 --version`（8 条）。
+- 检索脱敏补 `/root` `/etc` `/srv` `/usr` POSIX 前缀。
+
+### 修复（P2）
+- **`user_artifact` 工质必须来自用户消息**：`evidenceRef` 必须命中用户附件 id 或用户原话里的
+  路径/报错原文（≥ 4 字符），否则 `COACH_VERIFY_USER_ARTIFACT`；状态块新增【用户工质】列出附件 id。
+- `imageBlocks` 缓存上限 16 条，不再无界增长。
+- 文档与代码注释对齐：截图不再落盘、白名单 8 条、`readFileMaxBytes`、`apply_patch`、
+  已知限制补充读文件与 `read_image` 旁路。
+
+### 变更
+- `stateVersion` **10 → 11**：新增 `userArtifacts` / `userText`。
+- 单测 **171 → 204**（新增 `guard.test.js`、`check-tool.test.js`、`plan-tool.test.js` 与
+  媒体反馈 / 失败核查 / 工质来源 / 平台收口用例）。
+
 ## [0.4.2] - 2026-10-18
 
 ### 新增

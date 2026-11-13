@@ -215,6 +215,29 @@ function phaseGuidance(state) {
   }
 }
 
+/**
+ * v0.5.0：学习记录一行。COMPLETE 且没记录时给一次提示；有预览/保存时如实显示。
+ * PAUSED 分支不调用它（暂停块不含执行步骤）。
+ */
+function noteLine(state) {
+  const notes = Array.isArray(state.notes) ? state.notes : []
+  if (notes.length === 0) {
+    return state.phase === 'COMPLETE'
+      ? '【记录】未生成（可用 coach_note 预览；保存前需用户确认）'
+      : ''
+  }
+  const saved = notes.filter((note) => note?.status === 'saved')
+  if (saved.length > 0) {
+    const last = saved[saved.length - 1]
+    const readable = last.textPath || last.path || last.title || ''
+    return `【记录】已生成 ${saved.length} 份，文字版 ${clip(readable, 80)}`
+  }
+  if (notes.some((note) => note?.status === 'preview')) {
+    return '【记录】有 1 份预览未保存（保存前需用户确认）'
+  }
+  return ''
+}
+
 /** 检索缓存摘要（v0.3.0）。 */
 function researchSummary(state) {
   const list = Array.isArray(state.research) ? state.research : []
@@ -275,7 +298,9 @@ export function renderStateBlock(state, facts = {}) {
         + '（可直接用 coach_check(kind="command") 跑，不必先让用户手动跑）')
     }
     // v0.4.3：截图取证是可选能力，开着就提前说清楚怎么用。
-    if (facts.screenshotEnabled === true) {
+    // v0.4.5：必须同时是 win32。截图后端只有 Windows；在 Linux/macOS 上广告这个能力，
+    // 模型会反复去试，每次都拿到 COACH_CHECK_SHOT_PLATFORM。
+    if (facts.screenshotEnabled === true && facts.platform === 'win32') {
       const maxShots = Number.isInteger(facts.screenshotMaxPerStep) && facts.screenshotMaxPerStep > 0
         ? facts.screenshotMaxPerStep
         : 2
@@ -309,6 +334,8 @@ export function renderStateBlock(state, facts = {}) {
     if (summary !== '') lines.push(summary)
     lines.push('本次目标的全部步骤已经走完。请收尾：总结这次做了什么、复盘关键点、'
       + '列出所有被跳过的步骤（如有）、给出下一步学习建议。')
+    const record = noteLine(state)
+    if (record !== '') lines.push(record)
     lines.push(environment)
     return applyBudget(lines, maxStateBlockChars).join('\n')
   }
@@ -348,15 +375,31 @@ export function renderStateBlock(state, facts = {}) {
   lines.push(`【所需证据】${EVIDENCE_LABELS[step.evidence] ?? step.evidence}`)
   if (step.evidence === 'screen') {
     const window = step.check?.target ?? '<窗口>'
-    lines.push(`【截图取证】这一步只看界面：用户反馈之后用 `
-      + `coach_check(kind="screenshot", target="${window}") 抓一屏；`
-      + '抓失败会明确报失败，不要拿旧截图或失败结果判「通过」。')
+    if (facts.platform === 'win32' && facts.screenshotEnabled === true) {
+      lines.push(`【截图取证】这一步只看界面：用户反馈之后用 `
+        + `coach_check(kind="screenshot", target="${window}") 抓一屏；`
+        + '抓失败会明确报失败，不要拿旧截图或失败结果判「通过」。')
+    } else {
+      // 旧会话 / 非 Windows：计划不可改，但至少别让模型去撞一堵必然失败的墙。
+      lines.push('【截图取证】本平台或本配置下截图不可用：不要让用户等你截图，'
+        + '请让用户把画面截图发过来（user_artifact），或把这一步判「无法判断」/ 显式跳过。')
+    }
   }
   lines.push(`【本步失败次数】${failedAttempts}`)
   // v0.4.2：用量与预算。数字由状态算，模型不能改；超预算时这一行不裁。
   lines.push(usageLine(state, facts))
   lines.push(`【核查证据】${checkSummary(state, key)}`)
   lines.push(`【核查结论】${verdictSummary(state, key)}`)
+  // v0.4.5：把用户附件 id 摆到模型眼前，`user_artifact` 判「通过」时要引用它。
+  // 不给 id 的话，模型只能写「用户提供了截图」，而那条引用会被 verify 拒绝。
+  const artifacts = Array.isArray(state.userArtifacts) ? state.userArtifacts : []
+  if (artifacts.length > 0) {
+    const shown = artifacts.slice(-3)
+      .map((entry) => `${clip(entry.id ?? '', 80)}（${entry.kind ?? '附件'}，seq ${entry.at ?? '?'}）`)
+    lines.push(`【用户工质】${shown.join('；')}`)
+  }
+  const record = noteLine(state)
+  if (record !== '') lines.push(record)
 
   const back = latestBack(state)
   if (back !== undefined) {
