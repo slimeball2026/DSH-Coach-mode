@@ -49,11 +49,28 @@ export function itemsFromEvents(events) {
 
     if (event.type === 'user/message') {
       if (data.source?.kind !== 'user') continue
-      const text = (data.content ?? [])
+      const blocks = Array.isArray(data.content) ? data.content : []
+      const text = blocks
         .filter((block) => block.type === 'text')
         .map((block) => block.text)
         .join('\n')
-      items.push({ kind: 'feedback', text, at: typeof event.seq === 'number' ? event.seq : null })
+      // v0.4.5：只发截图 / 文件、不写字的反馈不是「零信息」——截图正是本插件的
+      // 主要证据形式。带不带媒体必须传给 applyUserFeedback，否则会误计失败次数。
+      const artifactBlocks = blocks.filter(
+        (block) => (block?.type === 'image' || block?.type === 'file') && block?.attachment?.attachmentId,
+      )
+      const artifacts = artifactBlocks.map((block) => ({
+        id: String(block.attachment.attachmentId),
+        kind: block.type,
+        at: typeof event.seq === 'number' ? event.seq : null,
+      }))
+      items.push({
+        kind: 'feedback',
+        text,
+        hasMedia: artifactBlocks.length > 0,
+        artifacts,
+        at: typeof event.seq === 'number' ? event.seq : null,
+      })
       continue
     }
 
@@ -189,7 +206,10 @@ export function foldItems(state, items, config) {
 
     if (item.kind === 'feedback') {
       try {
-        current = applyUserFeedback(current, item.text, at)
+        current = applyUserFeedback(current, item.text, at, {
+          hasMedia: item.hasMedia === true,
+          artifacts: item.artifacts ?? [],
+        })
       } catch (error) {
         if (!(error instanceof CoachError)) throw error
       }

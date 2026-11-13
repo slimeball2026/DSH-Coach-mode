@@ -81,6 +81,74 @@ function refersToSelfShot(evidenceRef, checks) {
 
 
 /**
+ * `coach_check` 的确定性前置校验：阶段、当前步骤、stepKey 归属。
+ *
+ * v0.4.5：抽出来供适配层在**产生任何副作用之前**调用。此前相位校验在 `applyCheck` 里，
+ * 而截图 / 命令 / 读文件都是先执行、后校验——在 PAUSED / COMPLETE 阶段调用
+ * `coach_check` 会真的截屏、跑命令，然后才被告知阶段不允许。
+ * @param {object} state 当前状态。
+ * @param {string} [stepKey] 模型传入的 stepKey。
+ * @returns {{ env: boolean, key: string, current: object|undefined }}
+ */
+export function preflightCheck(state, stepKey) {
+  if (ENV_PROBE_PHASES.includes(state.phase)) {
+    if (stepKey !== undefined && stepKey !== null && stepKey !== ENV_PROBE_KEY) {
+      throw new CoachError(
+        `计划还没建立，此时只能做环境核查（stepKey 必须是 "${ENV_PROBE_KEY}" 或省略）；`
+          + `收到「${stepKey}」。请先调用 coach_plan 提交计划。`,
+        'COACH_CHECK_STEP_MISMATCH',
+      )
+    }
+    return { env: true, key: ENV_PROBE_KEY, current: undefined }
+  }
+
+  assertPhase(state, ['WAIT_FEEDBACK', 'INSTALL_TOOL', 'VERIFY_DONE', 'DEGRADED'], 'coach_check')
+  const current = currentStep(state)
+  if (current === undefined) {
+    throw new CoachError('当前没有生效的步骤，无法采集核查证据：计划尚未被接受。', 'COACH_NO_STEP')
+  }
+  if (stepKey !== undefined && stepKey !== null && stepKey !== current.key) {
+    throw new CoachError(
+      `stepKey「${stepKey}」不是当前步骤：当前步骤是「${current.key}」（${current.step.goal}）。`
+        + '证据只能记在当前步骤上。',
+      'COACH_CHECK_STEP_MISMATCH',
+    )
+  }
+  return { env: false, key: current.key, current }
+}
+
+/** 归一化：小写、反斜杠转正斜杠、压缩空白。用于用户工质匹配。 */
+function normalizeUserMaterial(value) {
+  return String(value ?? '').toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * v0.4.5：`evidenceRef` 是不是真的来自用户消息。
+ *
+ * 允许两种：
+ * 1. 命中用户消息里出现过的附件 id（`state.userArtifacts`）；
+ * 2. 是用户原话的子串（≥ 4 字符，避免「好」「嗯」这种）。
+ *
+ * 这堵的是「模型随手编一个工质引用」：用户只说了「好」，模型却写
+ * `evidenceRef: "用户提供了截图"` 也能判通过。
+ * @param {object} state 当前状态。
+ * @param {string} evidenceRef 模型给的工质引用。
+ * @returns {boolean}
+ */
+export function refersToUserArtifact(state, evidenceRef) {
+  const needle = normalizeUserMaterial(evidenceRef)
+  if (needle === '') return false
+  const artifacts = Array.isArray(state.userArtifacts) ? state.userArtifacts : []
+  if (artifacts.some((entry) => typeof entry?.id === 'string'
+    && entry.id !== '' && needle.includes(entry.id.toLowerCase()))) {
+    return true
+  }
+  if (needle.length < 4) return false
+  const text = normalizeUserMaterial(state.userText)
+  return text !== '' && text.includes(needle)
+}
+
+/**
  * 记录一次只读核查（`coach_check`）。
  *
  * 两种情形：
@@ -106,14 +174,8 @@ export function applyCheck(state, observation, at) {
     )
   }
 
-  if (ENV_PROBE_PHASES.includes(state.phase)) {
-    if (stepKey !== undefined && stepKey !== null && stepKey !== ENV_PROBE_KEY) {
-      throw new CoachError(
-        `计划还没建立，此时只能做环境核查（stepKey 必须是 "${ENV_PROBE_KEY}" 或省略）；`
-          + `收到「${stepKey}」。请先调用 coach_plan 提交计划。`,
-        'COACH_CHECK_STEP_MISMATCH',
-      )
-    }
+  const pre = preflightCheck(state, stepKey)
+  if (pre.env) {
     return {
       ...state,
       checks: [...state.checks, {
@@ -128,23 +190,11 @@ export function applyCheck(state, observation, at) {
     }
   }
 
-  assertPhase(state, ['WAIT_FEEDBACK', 'INSTALL_TOOL', 'VERIFY_DONE', 'DEGRADED'], 'coach_check')
-  const current = currentStep(state)
-  if (current === undefined) {
-    throw new CoachError('当前没有生效的步骤，无法采集核查证据：计划尚未被接受。', 'COACH_NO_STEP')
-  }
-  if (stepKey !== undefined && stepKey !== null && stepKey !== current.key) {
-    throw new CoachError(
-      `stepKey「${stepKey}」不是当前步骤：当前步骤是「${current.key}」（${current.step.goal}）。`
-        + '证据只能记在当前步骤上。',
-      'COACH_CHECK_STEP_MISMATCH',
-    )
-  }
   const entered = state.phase === 'VERIFY_DONE' ? state : enterVerify(state)
   return {
     ...entered,
     checks: [...entered.checks, {
-      stepKey: current.key,
+      stepKey: pre.key,
       kind,
       target,
       ok: ok === true,
@@ -207,6 +257,22 @@ export function applyVerify(state, input, at) {
     )
   }
 
+  // ── v0.4.5：失败的文件/命令核查不能判「通过」 ─────────────────────────────
+  // 之前只要求「存在过一条 check」，于是 path_exists 返回「路径不存在」（ok:false）
+  // 之后仍然可以判通过——「硬核查」形同虚设。截图那条分支早就要求 latest.ok，
+  // 这里把 file / command 对齐成同一口径：最新一条必须成功。
+  if (verdict === '通过' && (evidence === 'file' || evidence === 'command')) {
+    const latest = checks[checks.length - 1]
+    if (latest === undefined || latest.ok !== true) {
+      throw new CoachError(
+        `最近一次核查没有成功（${latest?.kind ?? evidence} ${latest?.target ?? ''}：`
+          + `${String(latest?.detail ?? '没有记录').slice(0, 120)}）。失败的核查不能判「通过」：`
+          + '按失败原因处理后重新 coach_check，再 coach_verify。',
+        'COACH_VERIFY_CHECK_FAILED',
+      )
+    }
+  }
+
   // ── 5.2(3)：user_artifact 判「通过」必须给出工质引用 ─────────────────────
   if (verdict === '通过' && evidence === 'user_artifact' && evidenceRef === '') {
     throw new CoachError(
@@ -224,6 +290,22 @@ export function applyVerify(state, input, at) {
         + '要按界面判定，请把该步的 evidence 设成 "screen" 并用 coach_check(kind="screenshot") 取证；'
         + 'user_artifact 只能填用户给的截图 / 文件 / 报错原文。',
       'COACH_VERIFY_SELF_EVIDENCE',
+    )
+  }
+
+  // ── v0.4.5：user_artifact 的工质必须真的来自用户消息 ─────────────────────
+  // 没有记录到任何用户消息时（合成状态 / 极老的日志）不启用这条门：真实会话里
+  // 每条 user/message 都会填 userText，所以这道闸在实机上始终生效。
+  const hasUserMaterial = (Array.isArray(state.userArtifacts) && state.userArtifacts.length > 0)
+    || (typeof state.userText === 'string' && state.userText.trim() !== '')
+  if (verdict === '通过' && evidence === 'user_artifact' && hasUserMaterial
+    && !refersToUserArtifact(state, evidenceRef)) {
+    throw new CoachError(
+      `evidenceRef「${String(evidenceRef ?? '').slice(0, 80)}」在用户消息里找不到对应工质。`
+        + '只能引用两种东西：(1) 用户消息里附件的 attachment id（状态块【用户工质】会列出）；'
+        + '(2) 用户原话里出现过的路径 / 报错原文（至少 4 个字符）。'
+        + '「用户说做完了」不算工质；没有可引用的工质就判「无法判断」。',
+      'COACH_VERIFY_USER_ARTIFACT',
     )
   }
 

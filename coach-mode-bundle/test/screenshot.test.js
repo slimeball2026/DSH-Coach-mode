@@ -7,6 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { initialState } from '../core/machine.js'
@@ -15,8 +16,9 @@ import { renderStateBlock } from '../core/render.js'
 import { applyUserFeedback } from '../core/skip.js'
 import { applyCheck, applyVerify, normalizeShot } from '../core/verify.js'
 import { applyToolCall } from '../core/reduce.js'
+import { applyPause } from '../core/pause.js'
 import { resolveCoachConfig } from '../config.js'
-import { captureScript, parseCaptureOutput } from '../tools/coach-check.js'
+import { captureScript, parseCaptureOutput, createCheckTool } from '../tools/coach-check.js'
 
 /** 造一个"只看界面"的单步计划。 */
 function screenPlan(overrides = {}) {
@@ -232,7 +234,7 @@ test('v0.4.3 渲染：这一步给出【截图取证】和已存证摘要', () =
   let state = screenPlan()
   state = applyUserFeedback(state, '打开了', 20)
   state = applyCheck(state, shotCheck(21), 21)
-  const block = renderStateBlock(state, { screenshotEnabled: true, screenshotMaxPerStep: 2 })
+  const block = renderStateBlock(state, { screenshotEnabled: true, screenshotMaxPerStep: 2, platform: 'win32' })
   assert.match(block, /【截图取证】/)
   assert.match(block, /coach_check\(kind="screenshot", target="blender"\)/)
   assert.match(block, /截图「Blender」 800×600 → 已存证/)
@@ -240,7 +242,7 @@ test('v0.4.3 渲染：这一步给出【截图取证】和已存证摘要', () =
 })
 
 test('v0.4.3 渲染：计划建立前提示【可截图】怎么用', () => {
-  const block = renderStateBlock(initialState(), { screenshotEnabled: true, screenshotMaxPerStep: 2 })
+  const block = renderStateBlock(initialState(), { screenshotEnabled: true, screenshotMaxPerStep: 2, platform: 'win32' })
   assert.match(block, /【可截图】/)
   assert.match(block, /同一步最多 2 张/)
 })
@@ -260,8 +262,8 @@ test('v0.4.3 配置：截图默认关闭，只有显式 true 才开；非法值�
   assert.equal(resolveCoachConfig({ screenshotEnabled: 'true' }).screenshotEnabled, false)
   assert.equal(resolveCoachConfig({ screenshotEnabled: true }).screenshotEnabled, true)
   assert.equal(resolveCoachConfig({ screenshotMaxPerStep: 0 }).screenshotMaxPerStep, 2)
-  assert.equal(defaults.screenshotKeepFiles, true)
   assert.equal(defaults.screenshotMaxBytes, 8388608)
+  assert.equal('screenshotKeepFiles' in defaults, false, 'v0.4.5 起截图不再写盘，该配置已移除')
   assert.deepEqual(defaults.screenshotBlockTitles, ['deepseek harness'])
   assert.deepEqual(
     resolveCoachConfig({ screenshotBlockProcesses: ['DeepSeek Harness'] }).screenshotBlockProcesses,
@@ -290,9 +292,9 @@ test('v0.4.3 normalizeShot：缺 id 的一律丢弃，尺寸只收正整数', ()
 function scriptOptions(overrides = {}) {
   return {
     target: 'notepad',
-    outPath: 'C:\\work\\.coach\\shots\\shot-1.png',
     maxWidth: 1600,
     maxHeight: 1000,
+    maxBytes: 8388608,
     blocked: ['deepseek harness'],
     blockedTitles: ['deepseek harness'],
     selfPid: 4242,
@@ -350,10 +352,32 @@ test('v0.4.4 抓屏脚本：仍是纯 ASCII，且单引号正确转义', () => {
   assert.ok(script.includes("'O''Brien'"), '单引号必须转义成两个单引号')
 })
 
+test('v0.4.5 抓屏脚本：PNG 用 base64 回传，不写盘', () => {
+  const script = captureScript(scriptOptions())
+  assert.match(script, /data = \[Convert\]::ToBase64String\(\$bytes\)/)
+  assert.match(script, /bytes = \$bytes\.Length/)
+  assert.doesNotMatch(script, /\$final\.Save\(\$outPath/)
+  assert.doesNotMatch(script, /CreateDirectory/)
+  assert.doesNotMatch(script, /\.coach/)
+  // 编码后的字节数也由脚本自己卡上限，避免把超大画面塞进 stdout
+  assert.match(script, /error = 'too_large'/)
+})
+
+test('v0.4.5 抓屏调用：去掉 ExecutionPolicy Bypass，也不再保留截图文件', () => {
+  const source = readFileSync(new URL('../tools/coach-check.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /'-ExecutionPolicy'/)
+  assert.doesNotMatch(source, /screenshotKeepFiles/)
+  assert.doesNotMatch(source, /readBytes\(fileTarget/)
+})
+
 test('v0.4.4 parseCaptureOutput：能从噪声里取到 occluded 结果', () => {
   const parsed = parseCaptureOutput('warning: something\n{"ok":false,"error":"occluded","covered":9}\n')
   assert.equal(parsed.error, 'occluded')
   assert.equal(parsed.covered, 9)
+  // v0.4.5：成功结果带 base64 画面
+  const shot = parseCaptureOutput('{"ok":true,"data":"AAAA","width":10,"height":20}\n')
+  assert.equal(shot.data, 'AAAA')
+  assert.equal(shot.width, 10)
 })
 
 test('v0.4.4 normalizeShot：保留 method，未知值归空，旧记录不受影响', () => {
@@ -375,10 +399,10 @@ test('v0.4.4 渲染：状态块标出截图是自渲染还是屏幕像素', () =
     shot: { id: 'att-1', path: 'x.png', width: 800, height: 600, window: 'Blender', process: 'blender', pid: 1, method },
   })
 
-  const printed = renderStateBlock(applyCheck(state, shot('printwindow'), 21), { screenshotEnabled: true })
+  const printed = renderStateBlock(applyCheck(state, shot('printwindow'), 21), { screenshotEnabled: true, platform: 'win32' })
   assert.match(printed, /［自渲染］/)
 
-  const screen = renderStateBlock(applyCheck(state, shot('screen'), 21), { screenshotEnabled: true })
+  const screen = renderStateBlock(applyCheck(state, shot('screen'), 21), { screenshotEnabled: true, platform: 'win32' })
   assert.match(screen, /［屏幕像素］/)
 })
 
@@ -401,4 +425,59 @@ test('v0.4.4 折叠：method 会随 presentationMeta 进状态，重启后能重
     at: 21,
   })
   assert.equal(state.checks.at(-1).shot.method, 'printwindow')
+})
+
+// ── v0.4.5：副作用必须晚于相位校验 ──────────────────────────────────────────
+
+test('v0.4.5 coach_check：PAUSED 阶段先拒绝，绝不先截屏 / 读文件', async () => {
+  const paused = applyPause(screenPlan(), { action: 'pause', note: '先停一下' }, 30)
+  let sideEffects = 0
+  const subprocess = { spawn() { sideEffects += 1; throw new Error('must not spawn') } }
+  const fs = {
+    resolve() { sideEffects += 1; throw new Error('must not resolve') },
+    stat() { sideEffects += 1; throw new Error('must not stat') },
+    readText() { sideEffects += 1; throw new Error('must not read') },
+  }
+  const check = createCheckTool({
+    config: resolveCoachConfig({ screenshotEnabled: true }),
+    projection: { stateForExec: () => paused },
+    ctx: {
+      get: (name) => (name === 'subprocess' ? subprocess : name === 'fs' ? fs : undefined),
+    },
+  })
+
+  await assert.rejects(
+    check.execute({ kind: 'screenshot', target: 'blender' }, { signal: undefined }),
+    (error) => error.code === 'COACH_PHASE',
+  )
+  assert.equal(sideEffects, 0, '阶段不允许时不能先截屏')
+
+  await assert.rejects(
+    check.execute({ kind: 'read_file', target: 'C:/work/x.txt' }, { signal: undefined }),
+    (error) => error.code === 'COACH_PHASE',
+  )
+  assert.equal(sideEffects, 0, '阶段不允许时不能先读文件')
+})
+
+// ── v0.4.5：截图能力按平台收口 ──────────────────────────────────────────────
+
+test('v0.4.5 渲染：Linux/macOS 上不显示【可截图】，也不让模型去撞截图', () => {
+  const setup = renderStateBlock(initialState(), {
+    screenshotEnabled: true,
+    screenshotMaxPerStep: 2,
+    platform: 'linux',
+  })
+  assert.doesNotMatch(setup, /【可截图】/)
+
+  // 旧会话里已经存在 screen 步骤：不再给 coach_check 指令，改成让用户发截图
+  let state = screenPlan()
+  state = applyUserFeedback(state, '打开了', 20)
+  const block = renderStateBlock(state, {
+    screenshotEnabled: true,
+    screenshotMaxPerStep: 2,
+    platform: 'darwin',
+  })
+  assert.match(block, /截图不可用/)
+  assert.match(block, /user_artifact/)
+  assert.doesNotMatch(block, /coach_check\(kind="screenshot"/)
 })

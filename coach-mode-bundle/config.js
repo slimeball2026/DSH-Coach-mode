@@ -24,6 +24,8 @@ export const DEFAULT_ALLOW_COMMANDS = Object.freeze([
   'node -v',
   'npm -v',
   'python --version',
+  // v0.4.5：多数现代发行版（Ubuntu 24.04 等）只有 python3，没有 python。
+  'python3 --version',
 ])
 
 /** 配置默认值。 */
@@ -34,6 +36,9 @@ export const CONFIG_DEFAULTS = {
   sameMachine: true,
   commandTimeoutMs: 15000,
   readFileMaxChars: 1200,
+  // v0.4.5：读文件前的字节上限。宿主 readText 是全量读入，没有上限；模型指到
+  // 一个大文本文件就能把 host 进程内存打爆。先 stat，再决定读不读。
+  readFileMaxBytes: 1048576,
   listDirMaxEntries: 30,
   // v0.4.2 成本控制（SPEC §14）：三个上限都必须能在 YAML 里改。
   /** 同一步最多检索几次（第 N+1 次直接拒绝，失败调用也计数）。 */
@@ -53,14 +58,12 @@ export const CONFIG_DEFAULTS = {
   screenshotMaxHeight: 1000,
   /** 截图脚本超时。 */
   screenshotTimeoutMs: 20000,
-  /** 读回 PNG 的字节上限。 */
+  /** PNG 解码后的字节上限；超过在回传前就拒绝，不写盘。 */
   screenshotMaxBytes: 8388608,
   /** 永不作为截图目标的进程名（小写、去 .exe）——默认把自己和 Electron 挡掉。 */
   screenshotBlockProcesses: ['deepseek harness', 'electron', 'dsh'],
   /** 永不作为截图目标的窗口标题片段（小写）——进程名读不到时的兜底。 */
   screenshotBlockTitles: ['deepseek harness'],
-  /** true 时把截图 PNG 留在工作区 `.coach/shots/`（附件里另有一份），false 时存完就删。 */
-  screenshotKeepFiles: true,
 }
 
 /** 取正整数，非法就用默认值。 */
@@ -93,6 +96,7 @@ export function resolveCoachConfig(config) {
     sameMachine: raw.sameMachine === undefined ? CONFIG_DEFAULTS.sameMachine : raw.sameMachine !== false,
     commandTimeoutMs: naturalOf(raw.commandTimeoutMs, CONFIG_DEFAULTS.commandTimeoutMs),
     readFileMaxChars: naturalOf(raw.readFileMaxChars, CONFIG_DEFAULTS.readFileMaxChars),
+    readFileMaxBytes: naturalOf(raw.readFileMaxBytes, CONFIG_DEFAULTS.readFileMaxBytes),
     listDirMaxEntries: naturalOf(raw.listDirMaxEntries, CONFIG_DEFAULTS.listDirMaxEntries),
     maxResearchPerStep: naturalOf(raw.maxResearchPerStep, CONFIG_DEFAULTS.maxResearchPerStep),
     maxStateBlockChars: naturalOf(raw.maxStateBlockChars, CONFIG_DEFAULTS.maxStateBlockChars),
@@ -115,8 +119,5 @@ export function resolveCoachConfig(config) {
       raw.screenshotBlockTitles,
       CONFIG_DEFAULTS.screenshotBlockTitles,
     ).map((entry) => entry.toLowerCase()),
-    screenshotKeepFiles: raw.screenshotKeepFiles === undefined
-      ? CONFIG_DEFAULTS.screenshotKeepFiles
-      : raw.screenshotKeepFiles === true,
   }
 }

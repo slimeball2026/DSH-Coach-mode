@@ -124,3 +124,22 @@ test('空 query 与非法阶段被拒', () => {
     return true
   })
 })
+
+test('v0.4.5 脱敏：/root、/etc、/srv 等常见 POSIX 前缀也要覆盖', () => {
+  for (const path of ['/root/.ssh/config', '/etc/hosts', '/srv/app/log.txt', '/usr/local/bin/x']) {
+    const { query, redacted } = redactQuery(`打不开 ${path}`)
+    assert.equal(redacted, true, `${path} 应被脱敏`)
+    assert.ok(!query.includes(path), `${path} 不应原样留下`)
+  }
+})
+
+test('v0.4.5 脱敏：报错里夹带的 API key / 私钥标记也要替换', () => {
+  const { query, redacted } = redactQuery(
+    '报错 token sk-abcdefghijklmnopqrstuvwxyz012345 和 AKIAABCDEFGHIJKLMNOP 以及 ghp_abcdefghijklmnopqrstu',
+  )
+  assert.equal(redacted, true)
+  assert.ok(!query.includes('sk-abcdefghijklmnopqrstuvwxyz012345'))
+  assert.ok(!query.includes('AKIAABCDEFGHIJKLMNOP'))
+  assert.ok(!query.includes('ghp_abcdefghijklmnopqrstu'))
+  assert.match(query, /<secret>/)
+})

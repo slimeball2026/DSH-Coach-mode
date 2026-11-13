@@ -113,11 +113,17 @@ export function redactQuery(text) {
   )
   // 常见 POSIX 绝对路径前缀；不匹配 URL 里的 ://。允许中文逗号/顿号等分隔符。
   query = query.replace(
-    /(^|[\s，。、；：,;:（(])(\/(?:Users|home|tmp|var|opt|mnt|Volumes|private)\/[^\s"'<>|，。、；：,;:@]+)/g,
+    /(^|[\s，。、；：,;:（(])(\/(?:Users|home|root|etc|srv|usr|tmp|var|opt|mnt|Volumes|private)\/[^\s"'<>|，。、；：,;:@]+)/g,
     (_match, lead) => `${lead}<path>`,
   )
   // 附件对象 id（32 位以上 hex）。
   query = query.replace(/\b[0-9a-f]{32,}\b/gi, '<attachment>')
+  // 常见 API key / 私钥标记（v0.4.5）：报错文本里经常整段带着 token。
+  query = query.replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '<secret>')
+  query = query.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '<secret>')
+  query = query.replace(/\bAKIA[0-9A-Z]{16}\b/g, '<secret>')
+  query = query.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '<secret>')
+  query = query.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '<secret>')
   // 邮箱。
   query = query.replace(/\b[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+\b/g, '<email>')
 

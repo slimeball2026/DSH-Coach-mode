@@ -275,7 +275,9 @@ export function renderStateBlock(state, facts = {}) {
         + '（可直接用 coach_check(kind="command") 跑，不必先让用户手动跑）')
     }
     // v0.4.3：截图取证是可选能力，开着就提前说清楚怎么用。
-    if (facts.screenshotEnabled === true) {
+    // v0.4.5：必须同时是 win32。截图后端只有 Windows；在 Linux/macOS 上广告这个能力，
+    // 模型会反复去试，每次都拿到 COACH_CHECK_SHOT_PLATFORM。
+    if (facts.screenshotEnabled === true && facts.platform === 'win32') {
       const maxShots = Number.isInteger(facts.screenshotMaxPerStep) && facts.screenshotMaxPerStep > 0
         ? facts.screenshotMaxPerStep
         : 2
@@ -348,15 +350,29 @@ export function renderStateBlock(state, facts = {}) {
   lines.push(`【所需证据】${EVIDENCE_LABELS[step.evidence] ?? step.evidence}`)
   if (step.evidence === 'screen') {
     const window = step.check?.target ?? '<窗口>'
-    lines.push(`【截图取证】这一步只看界面：用户反馈之后用 `
-      + `coach_check(kind="screenshot", target="${window}") 抓一屏；`
-      + '抓失败会明确报失败，不要拿旧截图或失败结果判「通过」。')
+    if (facts.platform === 'win32' && facts.screenshotEnabled === true) {
+      lines.push(`【截图取证】这一步只看界面：用户反馈之后用 `
+        + `coach_check(kind="screenshot", target="${window}") 抓一屏；`
+        + '抓失败会明确报失败，不要拿旧截图或失败结果判「通过」。')
+    } else {
+      // 旧会话 / 非 Windows：计划不可改，但至少别让模型去撞一堵必然失败的墙。
+      lines.push('【截图取证】本平台或本配置下截图不可用：不要让用户等你截图，'
+        + '请让用户把画面截图发过来（user_artifact），或把这一步判「无法判断」/ 显式跳过。')
+    }
   }
   lines.push(`【本步失败次数】${failedAttempts}`)
   // v0.4.2：用量与预算。数字由状态算，模型不能改；超预算时这一行不裁。
   lines.push(usageLine(state, facts))
   lines.push(`【核查证据】${checkSummary(state, key)}`)
   lines.push(`【核查结论】${verdictSummary(state, key)}`)
+  // v0.4.5：把用户附件 id 摆到模型眼前，`user_artifact` 判「通过」时要引用它。
+  // 不给 id 的话，模型只能写「用户提供了截图」，而那条引用会被 verify 拒绝。
+  const artifacts = Array.isArray(state.userArtifacts) ? state.userArtifacts : []
+  if (artifacts.length > 0) {
+    const shown = artifacts.slice(-3)
+      .map((entry) => `${clip(entry.id ?? '', 80)}（${entry.kind ?? '附件'}，seq ${entry.at ?? '?'}）`)
+    lines.push(`【用户工质】${shown.join('；')}`)
+  }
 
   const back = latestBack(state)
   if (back !== undefined) {

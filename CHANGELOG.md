@@ -2,6 +2,48 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；`stateVersion` 是折叠语义的版本号，改它代表"旧会话要用新规则重新推导状态"。
 
+## [0.4.5] - 2026-11-13
+
+**评审修复轮**（按 P0 → P1 → Linux/macOS → P2 的顺序）。行为有变化，装完要重启。
+
+### 修复（P0）
+- **截图默认关闭**：随包 `cordis.patch.yml` 从 `screenshotEnabled: true` 改回 `false`，与
+  `config.js` 默认值和 README 一致。
+- **截图不再写盘**：抓屏脚本把 PNG 编码成 base64 从 stdout 回传，适配层解码后直接进
+  `ctx.attachments`；去掉 PowerShell 的 `-ExecutionPolicy Bypass`，移除 `screenshotKeepFiles`
+  配置项与工作区 `.coach/shots/` 第二份副本。
+- **守卫补 `apply_patch`**：`write` / `edit` / `apply_patch` 三个写入口都确定性拒绝；
+  人设明确禁止用 `pwsh` / `bash` 替用户写文件。
+
+### 修复（P1）
+- **纯图片/文件反馈不再误计失败**：`user/message` 带 image/file 块、文本为空时，
+  `applyUserFeedback` 不再按「零信息」+1，也不会触发强制出口。
+- **失败的核查不能判「通过」**：`file` / `command` 要求最近一条 `coach_check` 的 `ok === true`
+  （错误码 `COACH_VERIFY_CHECK_FAILED`），与截图口径对齐。
+- **相位校验先于副作用**：抽出 `preflightCheck`，`coach_check` 在截屏 / 跑命令 / 读文件之前
+  就拒绝非法阶段（PAUSED / COMPLETE 不再先截一张再报错）。
+- **`read_file` 加上限**：新增 `readFileMaxBytes`（默认 1 MiB），超过直接拒绝；回传长度按
+  `readFileMaxChars`，不再被 600 字预算砍半。
+
+### 修复（Linux / macOS）
+- 状态块只在 `win32` 显示【可截图】；旧会话里的 `screen` 步骤改为提示「截图不可用，请用户发截图」。
+- 计划受理前拒绝 `screen` 证据：非 Windows（`COACH_PLAN_PLATFORM_UNSUPPORTED`）或
+  `screenshotEnabled` 未开（`COACH_PLAN_SCREEN_DISABLED`），避免造出永远过不了的步骤。
+- 默认白名单补 `python3 --version`（8 条）。
+- 检索脱敏补 `/root` `/etc` `/srv` `/usr` POSIX 前缀。
+
+### 修复（P2）
+- **`user_artifact` 工质必须来自用户消息**：`evidenceRef` 必须命中用户附件 id 或用户原话里的
+  路径/报错原文（≥ 4 字符），否则 `COACH_VERIFY_USER_ARTIFACT`；状态块新增【用户工质】列出附件 id。
+- `imageBlocks` 缓存上限 16 条，不再无界增长。
+- 文档与代码注释对齐：截图不再落盘、白名单 8 条、`readFileMaxBytes`、`apply_patch`、
+  已知限制补充读文件与 `read_image` 旁路。
+
+### 变更
+- `stateVersion` **10 → 11**：新增 `userArtifacts` / `userText`。
+- 单测 **171 → 203**（新增 `guard.test.js`、`check-tool.test.js`、`plan-tool.test.js` 与
+  媒体反馈 / 失败核查 / 工质来源 / 平台收口用例）。
+
 ## [0.4.2] - 2026-10-18
 
 ### 新增

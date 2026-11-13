@@ -11,7 +11,20 @@
 档 1 只做三件事（`SPEC-档1最小切片.md` 第 1 节）：
 **状态机骨架**、**强制核查触发**、**合格标准进状态**。其余功能推迟到档 2。
 
-> **当前版本 0.4.4（2026-11-10）**：**截图不再截到遮挡物**——v0.4.3 的 `CopyFromScreen`
+> **当前版本 0.4.5（2026-11-13）**：**评审修复轮**。七件事：
+> ① 随包的 `screenshotEnabled` 回到 `false`（此前误写成 `true`，与文档和 Config 默认值矛盾）；
+> ② 截图 PNG 不再由 PowerShell 写盘，改为 base64 走 stdout 回传，**不再有 `.coach/shots/` 第二份副本**，
+>    也去掉了 `-ExecutionPolicy Bypass`；`screenshotKeepFiles` 配置项随之移除；
+> ③ 守卫补上 `apply_patch`；人设明确禁止用 `pwsh` / `bash` 替用户写文件；
+> ④ 只发截图、没有文字的反馈不再被误计为「零信息失败」；
+> ⑤ `file` / `command` 的最近一次核查失败时**不能再判「通过」**；
+> ⑥ `coach_check` 的相位校验提到副作用之前（PAUSED / COMPLETE 不再先截屏再报错）；
+> ⑦ Linux/macOS 收口：状态块不广告截图、`screen` 步骤在计划受理前被拒、
+>    `python3 --version` 进白名单、脱敏补 `/root` `/etc` `/srv` `/usr`；
+>    另有 `read_file` 大小上限、`user_artifact` 必须引用用户消息里的工质、`stateVersion` 10 → **11**。
+> 单测 **203**。
+>
+> **0.4.4（2026-11-10）**：**截图不再截到遮挡物**——v0.4.3 的 `CopyFromScreen`
 > 读的是"屏幕矩形里的像素"，目标窗口被任何窗口压住时会**静默把遮挡物当证据**返回，
 > `coach_verify` 还会照常放行（错图比失败图危害大）。v0.4.4 改为分层抓取：
 > ① 优先 `PrintWindow(PW_RENDERFULLCONTENT)`——让目标窗口自己渲染，**不受遮挡影响**；
@@ -68,7 +81,7 @@
 > **0.3.0**：新增 `coach_research`、`research_cache`、`RESEARCH` 过渡态、检索脱敏；四个文案缺口。
 >
 > **0.2.5**：修空 `sections` 的 `coach_plan` 死循环、`coach_check` 非法 `kind`，
-> 并按 Q5 B 启用 **7 条只读命令白名单**（显式 `allowCommands: []` 仍可关闭）。
+> 并按 Q5 B 启用 **8 条只读命令白名单**（显式 `allowCommands: []` 仍可关闭）。
 > 档 2 的施工图与版本路线见工作区 `../SPEC-档2-教练模式.md`。
 
 ---
@@ -324,7 +337,8 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
    **被遮挡 → 直接报 `occluded` 失败**（这通常意味着目标是 GPU 直绘窗口），
    **绝不回退到屏幕像素**——那等于把遮挡物截下来当证据，正是 v0.4.3 的 bug；
 3. 确认没有被遮挡才走 `Graphics.CopyFromScreen`。
-最后按 `screenshotMaxWidth/Height` 等比缩放并存 PNG。每张图的结果里带
+最后按 `screenshotMaxWidth/Height` 等比缩放。v0.4.5 起 PNG **不再写盘**：脚本把它编码成
+base64 从 stdout 回传，适配层解码后直接进 `ctx.attachments`。每张图的结果里带
 `method`（`printwindow` = 窗口自渲染，`screen` = 屏幕像素），状态块的核查摘要也会标
 `［自渲染］` / `［屏幕像素］`。窗口最小化、纯色画面（黑屏/DRM/独占全屏）、被遮挡拿不到画面
 都会**明确报失败**，不会把一张错图当证据。
@@ -332,8 +346,9 @@ PAUSED ──coach_pause(resume)──▶ 回暂停前阶段（证据不作废�
 **隐私**：`screenshotEnabled` 默认 **false**；打开后也只截**匹配到的那一个窗口**，且
 `screenshotBlockProcesses` / `screenshotBlockTitles` 默认把 DSH 自己和 Electron 挡在外面。
 截图会作为图片进入会话历史，**之后每一轮请求都会重发**，直到压缩——这是它比文字证据贵的地方。
-PNG 默认留在 `<工作目录>/.coach/shots/`（`screenshotKeepFiles: false` 可改成存完就删），
-用户随时能看到教练到底截了什么、也能直接删掉。
+v0.4.5 起 PNG **只在附件里存一份**，不再写工作区 `.coach/shots/`：截图路径不经过 fs 沙箱，
+也没有第二份可被误提交到 git 的磁盘副本。代价是用户不能在文件管理器里翻看教练截了什么，
+只能从会话里的图片看到。
 
 ## 七、每轮状态块
 
@@ -373,7 +388,7 @@ v0.3.3 又补了两条：可用性只认三类证据（`coach_check` 找到可�
 用户说已经装好）；环境核查只查与当前工具相关的路径/命令，不许跑无关的白名单命令。
 
 **v0.3.x 新增两行**：
-- `【可跑命令】`：把 `Config.allowCommands` 的 7 条只读命令直接列出来，并写明“可以直接用
+- `【可跑命令】`：把 `Config.allowCommands` 的 8 条只读命令直接列出来，并写明“可以直接用
   `coach_check(kind="command")` 跑，不必先让用户手动跑”。v0.3.1 起在**计划建立前**也显示
   （`INIT` / `确认环境`，不要求已有 `toolName`）。
 - `【检索缓存】`：最近 3 条检索的“查询 → N 个来源”摘要；失败时显示错误，并提示不要编造。
@@ -431,10 +446,11 @@ case "break":     return <br>                // 只有硬换行才换行
 |---|---|---|
 | `failureThreshold` | `3` | 连续失败多少次后状态块主动给出强制出口 |
 | `maxPlanSteps` | `12` | 一次计划允许的最大步骤总数 |
-| `allowCommands` | 7 条只读命令（见 `cordis.patch.yml`） | `coach_check(kind="command")` 的命令白名单（完整命令字符串精确匹配）。**显式写 `[]` = 关闭命令核查** |
+| `allowCommands` | 8 条只读命令（见 `cordis.patch.yml`，含 `python3 --version`） | `coach_check(kind="command")` 的命令白名单（完整命令字符串精确匹配）。**显式写 `[]` = 关闭命令核查** |
 | `sameMachine` | `true` | 教练与用户是否同一台机器；远端 fs 后端部署时设 `false`，【位置关系】自动改写 |
 | `commandTimeoutMs` | `15000` | 命令核查超时 |
 | `readFileMaxChars` | `1200` | `read_file` 回传给模型的字符上限 |
+| `readFileMaxBytes` | `1048576` | `read_file` 之前的文件大小上限（v0.4.5）；超过直接拒绝，不整份读入 |
 | `listDirMaxEntries` | `30` | `list_dir` 回传的条目上限 |
 | `maxResearchPerStep` | `3` | 同一步最多检索几次；第 N+1 次直接拒绝（`COACH_RESEARCH_BUDGET`），**失败也计数**。换到下一步额度重置 |
 | `maxStateBlockChars` | `4000` | 状态块字符预算；超了按【检索缓存】→【回退记录】/【跳过提醒】→【核查证据】→【环境核查】/【可跑命令】/【位置关系】的顺序换成短提示或删除；**当前步骤/【请执行】/【合格标准】/【核查结论】/错误提示永不裁** |
@@ -444,19 +460,17 @@ case "break":     return <br>                // 只有硬换行才换行
 | `screenshotMaxWidth` | `1600` | 截图宽度上限（像素），超过等比缩放 |
 | `screenshotMaxHeight` | `1000` | 截图高度上限（像素） |
 | `screenshotTimeoutMs` | `20000` | 抓屏脚本超时 |
-| `screenshotMaxBytes` | `8388608` | 读回 PNG 的字节上限 |
+| `screenshotMaxBytes` | `8388608` | PNG 解码后的字节上限（超过在回传前拒绝） |
 | `screenshotBlockProcesses` | `deepseek harness` / `electron` / `dsh` | 永不作为截图目标的进程名（小写）。**写这个字段会整体替换默认值** |
 | `screenshotBlockTitles` | `deepseek harness` | 永不作为截图目标的窗口标题片段（小写）；进程名读不到时的兜底。同样整体替换 |
-| `screenshotKeepFiles` | `true` | `true` 时把截图 PNG 留在工作区 `.coach/shots/`（附件里另有一份，用户可查可删），`false` 存完就删 |
 
-例：打开截图核查，并让两张截图都保留在工作区：
+例：打开截图核查（PNG 只进附件，不落盘）：
 
 ```yaml
           - id: coach-engine
             name: '@local/coach-mode'
             config:
               screenshotEnabled: true
-              screenshotKeepFiles: true
               screenshotMaxPerStep: 3
 ```
 
@@ -470,7 +484,7 @@ case "break":     return <br>                // 只有硬换行才换行
                 - git branch --show-current
 ```
 
-注意：写 `allowCommands` 会**整体替换**默认白名单，不是追加。要保留默认 7 条，就把它们
+注意：写 `allowCommands` 会**整体替换**默认白名单，不是追加。要保留默认 8 条，就把它们
 和新命令一起写进去；要关闭命令核查，写 `allowCommands: []`。
 
 ---
@@ -508,6 +522,9 @@ v0.4.4 抓取方式：PrintWindow 先于 CopyFromScreen、回退前必须检测�
 【安装分支·可早退】、【可用性判断】、【回退记录】、【进度摘要】、PAUSED 块）、
 `research.test.js`（脱敏、来源归一化、成功写缓存、失败降级）、
 `config.test.js`（默认只读白名单）、
+`guard.test.js`（v0.4.5 守卫：write/edit/apply_patch 拒绝，只读与 shell 放行，畸形输入不崩）、
+`check-tool.test.js`（v0.4.5 read_file：readFileMaxChars 回传长度、readFileMaxBytes 超限不读）、
+`plan-tool.test.js`（v0.4.5 screen 计划的平台前置：Linux/macOS 与截图关闭时受理前拒绝）、
 `tool-shape.test.js`（八个工具都有非空 `description`，模型可见 schema 是无损 JSON——v0.3.4 事故回归）、
 `decoupling.test.js`（**整包**零宿主依赖 + `core/` 零 Node 内置模块 + 零时间/随机）。
 
@@ -523,77 +540,85 @@ node <本仓库路径>\_ref\smoke-coach.mjs
 
 ## 十、已知限制（诚实写在这里）
 
-1. **`pwsh` / `bash` 本切片不加守卫。**"不代做"在命令行这一项上仍靠提示词。
-   命令的副作用难以可靠判定，列为档 2 待办。文件编辑（`write` / `edit`）已经物理拒绝。
-2. **命令核查默认只读白名单。** 默认允许 7 条只读命令（`git --version` / `git status` /
-   `git config --global --list` / `git log --oneline -5` / `node -v` / `npm -v` / `python --version`）；
+1. **`pwsh` / `bash` 本切片不加守卫。**"不代做"在命令行这一项上仍靠提示词
+   （v0.4.5 起人设明确禁止用 shell 替用户写文件）。文件编辑（`write` / `edit` / `apply_patch`）
+   已经物理拒绝；但按名字守卫是 fail-open 的，宿主新增写工具不会自动覆盖。
+2. **命令核查默认只读白名单。** 默认允许 8 条只读命令（`git --version` / `git status` /
+   `git config --global --list` / `git log --oneline -5` / `node -v` / `npm -v` /
+   `python --version` / `python3 --version`）；
    白名单外的命令仍会失败。显式写 `allowCommands: []` 可以关闭命令核查、只留文件系统。
 3. **配置没有 schema 校验。** 见第八节：字段只能手改 YAML，写错会静默回落默认值，
    Plugin Manager 里也没有表单。这是"不许 import 宿主包"的直接代价。
 4. **状态是"按需折叠 + 进程内缓存"。** 没有跨进程持久化；但状态本身完全可从会话日志重算，
    所以重启、恢复、fork 之后仍然正确（只是重算一次）。
-5. **`coach_check` 的读取走宿主 `fs` 服务**，会受沙箱与审批策略约束——这是设计意图（决策 D7），
-   不是缺陷：它保证"核查"不会变成绕过策略的读写后门。
-6. **依赖 DSH 插件 API，API 随版本变化。** DSH 升级后请重新核对
+5. **`coach_check` 的读取走宿主 `fs` 服务，但读不受沙箱限制**——DSH 的 fs 沙箱
+   "所有模式都允许读"，所以 `read_file` 能读工作区外的路径（回传前 `readFileMaxChars` 截断，
+   v0.4.5 又加了 `readFileMaxBytes` 上限）。它不会绕过写策略；但"读"本身不构成边界，
+   这与宿主的 `read` 工具一致。
+6. **截图只在 Windows 上有后端。** Linux/macOS 上 `coach_check(kind="screenshot")` 直接报
+   `COACH_CHECK_SHOT_PLATFORM`；状态块也不再广告【可截图】，计划里的 `screen` 步骤会在受理前被拒。
+   另外，模型仍可以走 `bash`/`pwsh` + `read_image` 自己看图——那条路不写 `checks`，
+   不能用来通过 `coach_verify`，但也不受截图预算/窗口屏蔽约束。
+7. **依赖 DSH 插件 API，API 随版本变化。** DSH 升级后请重新核对
    `SPEC-档1最小切片.md` 第 13 节的 8 项，以及本节第 3 条背后的"不许 import 宿主包"约束。
-7. **宿主提供的提示词变量会随版本增删。** 0.2.0-rc.2 注册过 `cwd`，0.2.1-rc.1 只剩
+8. **宿主提供的提示词变量会随版本增删。** 0.2.0-rc.2 注册过 `cwd`，0.2.1-rc.1 只剩
    `provider` / `model`。人设里一旦引用不存在的变量，**不是降级而是每一轮直接失败**：
    `unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix"`。
    本包现在**不使用任何提示词变量**（工作目录由状态块【位置关系】给出）。
-8. **preset 不是安全沙箱。** YAML 与插件仍然执行宿主代码。
-9. **改完必须"覆盖安装 + 重启"，两个都要。** 只重启不重装：失败的 preset 声明会一直挂在
+9. **preset 不是安全沙箱。** YAML 与插件仍然执行宿主代码。
+10. **改完必须"覆盖安装 + 重启"，两个都要。** 只重启不重装：失败的 preset 声明会一直挂在
    名单上带诊断、无法组合会话；只重装不重启：加载的是旧的模块代。
-10. **检索依赖宿主 `web` 服务。** `coach_research` 通过 `ctx.get('web')` 调用；preset 没挂
+11. **检索依赖宿主 `web` 服务。** `coach_research` 通过 `ctx.get('web')` 调用；preset 没挂
     `tool-web` 或 provider 不可用时，会报 `COACH_RESEARCH_NO_WEB` 或结构化检索失败。
     来源摘要进 `research_cache`；长正文会截断，不把整页内容塞进状态。
-11. **检索脱敏是保守规则。** 只替换 Windows/UNC/常见 POSIX 路径、32 位以上 hex 附件 id、
+12. **检索脱敏是保守规则。** 只替换 Windows/UNC/常见 POSIX 路径、32 位以上 hex 附件 id、
     邮箱；不做语义级 PII 识别。需要保留原文检索时，模型要先征得用户同意。
-12. **检索失败不自动降级。** 0.3.1 起失败只写 `research_cache`（`ok:false`）和状态块的
+13. **检索失败不自动降级。** 0.3.1 起失败只写 `research_cache`（`ok:false`）和状态块的
     【检索缓存】失败；是否判「无法判断」/进 `DEGRADED` 由模型用 `coach_verify` 决定。
-13. **安装分支的受控早退只认 `toolAvailable:"yes"`。** 这是刻意的：没装好时用重新提交
+14. **安装分支的受控早退只认 `toolAvailable:"yes"`。** 这是刻意的：没装好时用重新提交
     “洗”成学习分支，会把物理前提绕过去。没装好就继续安装计划，或用 `coach_skip` 明确跳过。
     早退会作废安装步骤的核查/跳过记录，新学习计划从第 1 步重新开始。
-14. **安装分支的相位在 0.3.3 才是全程 `INSTALL_TOOL`。** 0.3.2 推进到第 2 步会掉回
+15. **安装分支的相位在 0.3.3 才是全程 `INSTALL_TOOL`。** 0.3.2 推进到第 2 步会掉回
     `WAIT_FEEDBACK`；如果你的会话是在 0.3.2 上建的，折叠后仍显示旧相位，重新建会话即可。
-15. **`coach_back` 只做同会话、只能往回退。** 不提供跨会话续接；也不会“自动回滚”已经发生的
+16. **`coach_back` 只做同会话、只能往回退。** 不提供跨会话续接；也不会“自动回滚”已经发生的
     真实操作——它只改教练状态，用户改过的文件需要用户自己还原。回退后重做的判定
     一律按新证据算。
-16. **暂停/恢复只做同会话。** 暂停状态跟当前会话绑定：关闭后重开同一个会话仍是暂停；换新会话不接。
+17. **暂停/恢复只做同会话。** 暂停状态跟当前会话绑定：关闭后重开同一个会话仍是暂停；换新会话不接。
     暂停不作废旧证据，恢复后可以继续核查；如果模型忘记调 `resume`，用户说一句「继续」即可。
     状态块在 `PAUSED` 时不会给【请执行】，避免模型“暂停了还在讲课”。
-17. **支撑等级不改计划里的 `action` 原文。** 等级只改变**正文怎么讲**（人设规定），
+18. **支撑等级不改计划里的 `action` 原文。** 等级只改变**正文怎么讲**（人设规定），
     【请执行】在状态块里仍是当初写进计划的那句话。所以等级降为 1 以后，模型仍可能在正文里
     把细节讲全——这是软约束，A14 验收要抽查真实回复，不能只看状态块。
     等级本身是代码算的（不可由模型写），因此不会出现“模型自降等级少核查”。
-18. **状态块预算裁的是“注入文本”，不是计划本身。** 预算超了以后，被裁掉的是
+19. **状态块预算裁的是“注入文本”，不是计划本身。** 预算超了以后，被裁掉的是
     检索缓存/回退记录/跳过提醒/历史证据这些**展示用**内容；计划里的 `action`、`standard`
     以及会话日志里的原始记录都还在。下一轮如果不再超预算，它们会重新出现。
     反过来，如果【请执行】+【合格标准】本身就超过预算，块会**超预算**——这是刻意的优先级。
-19. **检索预算按“步”而不是按“会话”。** 同一会话里换到下一步，额度就重置；
+20. **检索预算按“步”而不是按“会话”。** 同一会话里换到下一步，额度就重置；
     用户明确要求放宽时，只能改 `maxResearchPerStep`，模型没有绕过入口。
-20. **截图核查默认关闭，而且只支持 Windows。** 抓屏走 GDI + Win32 窗口枚举；macOS / Linux 上
+21. **截图核查默认关闭，而且只支持 Windows。** 抓屏走 GDI + Win32 窗口枚举；macOS / Linux 上
     `coach_check(kind="screenshot")` 会直接拒绝（`COACH_CHECK_SHOT_PLATFORM`）。`sameMachine:false`
     时也拒绝——远端部署截到的是服务器桌面，不是用户的屏幕。
-21. **截图只证明“屏幕现在长这样”，不证明“用户做完了”。** v0.4.3 只落了两道闸
+22. **截图只证明“屏幕现在长这样”，不证明“用户做完了”。** v0.4.3 只落了两道闸
     （必须晚于用户这次反馈、最近一张必须成功），**没有做基线对比**（步开始时抓一张、结束时比像素差）——
     那要多一倍图片成本，留给下一版。所以【合格标准】仍要写成“界面上能看见 X”，
     不要写成“你点了 X”。
-22. **这些情况抓不到（不是 bug）：** 窗口最小化、独占全屏、DRM 保护、GPU 黑屏、被 UAC 安全桌面盖住，
+23. **这些情况抓不到（不是 bug）：** 窗口最小化、独占全屏、DRM 保护、GPU 黑屏、被 UAC 安全桌面盖住，
     以及 **v0.4.4 新增的 `occluded`：目标是 GPU 直绘窗口（Blender / 视频 / 游戏）且它被别的窗口
     盖住**——这类窗口 `PrintWindow` 拿不到内容，而从屏幕像素取图只能截到遮挡物，所以宁可失败。
     失败会明说原因（`window_minimized` / `blank_image` / `occluded`+采样覆盖数 / `no_window`
     + 候选窗口列表），模型应当让用户把目标窗口切到最前面再抓，而不是拿失败结果或旧图判通过。
     普通 UI 窗口（记事本 / 浏览器 / Electron）被盖住时 v0.4.4 **仍能截到**——那是 `PrintWindow`
     主路径解决的问题。
-23. **截图脚本走 `ctx.subprocess`，不受 `pwsh` 工具的沙箱护栏约束。** 和本节第 1 条是同一个已知口子：
+24. **截图脚本走 `ctx.subprocess`，不受 `pwsh` 工具的沙箱护栏约束。** 和本节第 1 条是同一个已知口子：
     它只在“选哪个窗口”上受限（进程名 / 标题黑名单），不在文件系统与网络访问上受限。
     这是默认关闭的另一个理由。
-24. **图片会随历史重复计费。** 一张 1600×1000 的图约 1–2k 视觉 token，进入会话后每一轮请求都会重发，
+25. **图片会随历史重复计费。** 一张 1600×1000 的图约 1–2k 视觉 token，进入会话后每一轮请求都会重发，
     直到压缩；当前 profile 里 `image-offload` 未启用、`tool-result-pruner` 只裁文本。
     所以默认 `screenshotMaxPerStep: 2` 且默认缩到 1600×1000。
-25. **`stateVersion` 升到 10。** 旧会话的缓存状态会作废并重折一次（只是重算，不丢日志）；
-    `checks` 条目新增可选 `shot`，状态新增 `lastUserFeedbackAt`。装回 0.4.2 不会崩，
-    但 0.4.3 写下的截图记录会被当成未知字段忽略。
+26. **`stateVersion` 升到 11。** 旧会话的缓存状态会作废并重折一次（只是重算，不丢日志）；
+    v0.4.5 新增 `userArtifacts` / `userText`（`user_artifact` 判通过时校验工质来源）。
+    装回 0.4.2 不会崩，但新字段会被当成未知字段忽略。
 
 ## 十一、改哪里
 

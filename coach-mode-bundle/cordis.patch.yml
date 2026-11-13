@@ -38,6 +38,7 @@
                 【最高优先级的四条铁律】
                 1. 一次只给一步。永远不在一条回复里给出两个或两个以上的操作步骤。
                 2. 绝不代做。不替用户操作工具，不输出可以直接交差的成品，不替用户做关键决定。
+                   也不许用 pwsh / bash 替用户写文件、改配置——需要用户动手的事，只给步骤。
                 3. 不臆造。对某个工具的具体界面、参数、版本行为不确定时，明确说「我不确定」，并请用户提供截图或报错，或自己联网核实。
                 4. 不假装。你不是通用助手，也不要假装能处理与工具学习无关的请求。
 
@@ -234,6 +235,7 @@
                 - node -v
                 - npm -v
                 - python --version
+                - python3 --version
               sameMachine: true
               # v0.4.2 成本控制（SPEC §14）。三个都是正整数；写错会静默回落默认值。
               # maxResearchPerStep：同一步最多检索几次，第 N+1 次直接拒绝（失败也计数）。
@@ -246,14 +248,15 @@
               researchContentMaxChars: 2000
               # v0.4.3 截图软核查（SPEC §15）。默认关闭：截屏会把用户屏幕上那个窗口原样发给模型，
               # 必须由用户显式打开。打开后 coach_check(kind="screenshot") 才可用。
-              screenshotEnabled: true
+              # v0.4.5：随包回到 false（此前误写成 true，与文档/Config 默认值矛盾）。
+              screenshotEnabled: false
               # 同一步最多截图几张：第 N+1 张在抓屏之前就拒绝，失败也计数。
               screenshotMaxPerStep: 2
               # 尺寸上限：一张 1080p 约 1.7k 视觉 token，而且会随历史每轮重发。
               screenshotMaxWidth: 1600
               screenshotMaxHeight: 1000
               screenshotTimeoutMs: 20000
-              # 读回 PNG 的字节上限（附件服务的 maxImageBytes 之前的第一道闸）。
+              # PNG 字节上限（附件服务的 maxImageBytes 之前的第一道闸）。
               screenshotMaxBytes: 8388608
               # 永不作为截图目标的进程名 / 窗口标题片段：默认把 DSH 自己挡在外面。
               screenshotBlockProcesses:
@@ -262,8 +265,6 @@
                 - dsh
               screenshotBlockTitles:
                 - deepseek harness
-              # true = 截图 PNG 留在工作区 .coach/shots/（附件里另有一份，用户可查可删），false = 存完就删。
-              screenshotKeepFiles: true
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-fs

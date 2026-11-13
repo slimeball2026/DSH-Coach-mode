@@ -1,16 +1,16 @@
 /**
  * `coach_check` —— 采集只读证据（决策 D7：只做只读动作，且必须走宿主服务）。
  *
- * 四条只读 kind：path_exists / list_dir / read_file 经 `ctx.fs`，command 经 `ctx.subprocess`，
- * 都不碰 `node:fs`，因此不绕过沙箱与审批策略；`kind = "command"` 只在命令命中
- * `Config.allowCommands` 白名单时才执行，默认白名单为空 = 默认不支持命令核查（用户已确认）。
+ * 四条只读 kind：path_exists / list_dir / read_file 经 `ctx.fs`，command 经 `ctx.subprocess`。
+ * `kind = "command"` 只在命令命中 `Config.allowCommands` 白名单时才执行。
  *
  * v0.4.3 新增 `kind = "screenshot"`（SPEC §15）：截「用户屏幕上某个窗口」当证据。
  * 它和 command 一样走 `ctx.subprocess`，但**多两道闸**：
  *   1. `Config.screenshotEnabled` 显式打开（默认关）——截屏会把用户屏幕内容发给模型；
  *   2. 同一步最多 `screenshotMaxPerStep` 张，失败也计数。
- * 抓到的 PNG 先落工作区 `.coach/shots/`，读回字节后经 `ctx.attachments.saveImage` 存成
- * 持久附件，再把 `{ type: 'image', attachment }` 作为工具结果的一部分回给模型。
+ *
+ * v0.4.5：截图**不再写工作区文件**。脚本把 PNG 以 base64 从 stdout 回传，适配层解码后走
+ * `ctx.attachments.saveImage`。因此截图这条路径不经过 fs 沙箱，也不留下第二份磁盘副本。
  */
 
 import { defineTool } from './define-tool.js'
@@ -18,18 +18,20 @@ import {
   CHECK_KINDS,
   CoachError,
   checksFor,
-  currentStepKey,
   effectiveSinceBack,
 } from '../core/machine.js'
-import { applyCheck } from '../core/verify.js'
+import { applyCheck, preflightCheck } from '../core/verify.js'
 
 const DETAIL_BUDGET = 600
+
+/** v0.4.5：截图字节的硬上限，防止把 config 写成超大值后一次性占满内存。 */
+const SCREENSHOT_BYTES_HARD_CAP = 32 * 1024 * 1024
 
 const DESCRIPTION = [
   '采集一步的只读核查证据。这是核查的唯一取证通道：evidence 为 file / command / screen 的步骤，',
   '必须先调用本工具拿到证据，coach_verify 才会受理。',
   'kind=path_exists 查路径是否存在；kind=list_dir 列目录；kind=read_file 读文本；',
-  'kind=command 执行一条只读命令（默认有 7 条只读白名单，可直接跑；白名单外的命令会失败）；',
+  'kind=command 执行一条只读命令（默认有 8 条只读白名单，可直接跑；白名单外的命令会失败）；',
   'kind=screenshot 截用户屏幕上指定的窗口（需要 Config 打开 screenshotEnabled；',
   'target 写进程名 / 窗口标题片段 / foreground / pid:1234，只截匹配到的那个窗口，不截整屏）。',
   '结果原样记录，不做解释、不做判断。截图失败也是一条记录（ok=false），不会凭空通过。',
@@ -71,6 +73,13 @@ async function observeFile(fs, kind, target, config, exec) {
   }
 
   if (info.type !== 'file') return { ok: false, detail: `该路径不是普通文件（类型 ${info.type}）` }
+  if (info.size !== undefined && info.size > config.readFileMaxBytes) {
+    return {
+      ok: false,
+      detail: `文件有 ${info.size} 字节，超过 readFileMaxBytes（${config.readFileMaxBytes}）上限；`
+        + '不整份读入。需要看内容请让用户贴出相关片段，或调大该上限。',
+    }
+  }
   const text = await fs.readText(resolved)
   return {
     ok: true,
@@ -85,7 +94,7 @@ async function observeCommand(subprocess, command, config, exec) {
   if (!allowed.includes(command)) {
     // v2.2：把"下一步该怎么办"直接写进错误里——实测模型会在这里空转。
     throw new CoachError(
-      '命令核查未启用：这条命令不在 Config.allowCommands 白名单里（默认白名单为空）。'
+      '命令核查未启用：这条命令不在 Config.allowCommands 白名单里。'
         + '**不要重复试命令核查**。三条可行的替代：'
         + '(1) 改用文件核查：path_exists / list_dir / read_file；'
         + '(2) 如果这一小步确实只能靠命令输出判断，把该步的 evidence 设成 user_artifact，'
@@ -138,11 +147,15 @@ function psLiteral(value) {
  * 3. 被盖住 → 直接报 `occluded` 失败，**绝不回退到屏幕像素**（那会截到遮挡物当证据）；
  * 4. 没被盖住 → 回退 `CopyFromScreen`（GPU 直绘窗口只有这条能拿到画面）。
  * 窗口尺寸改用 DWM 扩展边框，去掉 GetWindowRect 里那圈不可见的阴影边距。
+ *
+ * v0.4.5：PNG **不再写盘**。脚本把画面编码成 base64，随结果 JSON 从 stdout 回传；
+ * 适配层解码后走 `ctx.attachments.saveImage`。这样截图路径不再绕过 fs 沙箱，
+ * 也不会在工作区留下 `.coach/shots/` 里的第二份副本。
  * @param {object} options 参数。
  * @returns {string} PowerShell 脚本文本。
  */
 export function captureScript(options) {
-  const { target, outPath, maxWidth, maxHeight, selfPid } = options
+  const { target, maxWidth, maxHeight, maxBytes, selfPid } = options
   const blocked = Array.isArray(options.blocked) ? options.blocked : []
   const blockedTitles = Array.isArray(options.blockedTitles) ? options.blockedTitles : []
   const blockedList = blocked.length === 0 ? '@()' : `@(${blocked.map(psLiteral).join(', ')})`
@@ -211,9 +224,9 @@ public static class CoachShot {
   [CoachShot]::EnableDpiAwareness()
 
   $target = ${psLiteral(target)}
-  $outPath = ${psLiteral(outPath)}
   $maxWidth = ${maxWidth}
   $maxHeight = ${maxHeight}
+  $maxBytes = ${maxBytes}
   $blocked = ${blockedList}
   $blockedTitles = ${blockedTitleList}
   $selfPid = ${selfPid}
@@ -411,16 +424,25 @@ public static class CoachShot {
     $bitmap.Dispose()
   }
 
-  $directory = [System.IO.Path]::GetDirectoryName($outPath)
-  if (-not [System.IO.Directory]::Exists($directory)) { [void][System.IO.Directory]::CreateDirectory($directory) }
-  $final.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  # v0.4.5: hand the PNG back as base64 on stdout. Writing a file from this
+  # subprocess would bypass the harness fs sandbox and leave screenshot copies
+  # on disk; the adapter stores the bytes through ctx.attachments.saveImage.
+  $stream = New-Object System.IO.MemoryStream
+  $final.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
   $savedWidth = $final.Width
   $savedHeight = $final.Height
   $final.Dispose()
+  $bytes = $stream.ToArray()
+  $stream.Dispose()
+  if ($bytes.Length -gt $maxBytes) {
+    Write-Result @{ ok = $false; error = 'too_large'; bytes = $bytes.Length; limit = $maxBytes }
+    exit 0
+  }
 
   Write-Result @{
     ok = $true
-    path = $outPath
+    data = [Convert]::ToBase64String($bytes)
+    bytes = $bytes.Length
     width = $savedWidth
     height = $savedHeight
     sourceWidth = $width
@@ -505,6 +527,11 @@ function captureFailure(result) {
     case 'zero_size':
     case 'no_rect':
       return { detail: `窗口「${title}」没有可截取的区域（可能已关闭或尺寸为 0）。请用户重新打开后再试。` }
+    case 'too_large':
+      return {
+        detail: `截图有 ${result?.bytes ?? '?'} 字节，超过 ${result?.limit ?? '?'} 字节上限，`
+          + '没有回传。请调小 screenshotMaxWidth/Height，或把该步的 evidence 改成 user_artifact。',
+      }
     case 'exception':
       return { detail: `截图脚本出错：${clip(result?.message ?? '未知错误', 200)}` }
     default:
@@ -553,13 +580,9 @@ async function observeScreenshot(deps, target, exec) {
   }
 
   const subprocess = ctx.get('subprocess')
-  const fs = ctx.get('fs')
   const attachments = ctx.get('attachments')
   if (subprocess === undefined) {
     throw new CoachError('宿主的 subprocess 服务不可用，无法截图。', 'COACH_CHECK_NO_SUBPROCESS')
-  }
-  if (fs === undefined) {
-    throw new CoachError('宿主的 fs 服务不可用，无法读回截图。', 'COACH_CHECK_NO_FS')
   }
   if (attachments === undefined) {
     throw new CoachError(
@@ -569,17 +592,14 @@ async function observeScreenshot(deps, target, exec) {
     )
   }
 
-  const cwd = cwdOf(exec)
-  const directory = `${cwd.replace(/[\\/]+$/, '')}\\.coach\\shots`
-  const stamp = Date.now().toString(36)
-  const name = `shot-${stamp}.png`
-  const outPath = `${directory}\\${name}`
-
+  // v0.4.5：PNG 从 stdout 以 base64 回传，不再落盘。name 只用于附件展示。
+  const name = `shot-${Date.now().toString(36)}.png`
+  const maxBytes = Math.min(config.screenshotMaxBytes, SCREENSHOT_BYTES_HARD_CAP)
   const script = captureScript({
     target,
-    outPath,
     maxWidth: config.screenshotMaxWidth,
     maxHeight: config.screenshotMaxHeight,
+    maxBytes,
     blocked: config.screenshotBlockProcesses ?? [],
     blockedTitles: config.screenshotBlockTitles ?? [],
     selfPid: process.pid,
@@ -587,12 +607,16 @@ async function observeScreenshot(deps, target, exec) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   const timeout = AbortSignal.timeout(config.screenshotTimeoutMs)
   const signal = exec?.signal === undefined ? timeout : AbortSignal.any([exec.signal, timeout])
+  // base64 约为原始字节的 4/3，再给 JSON 包装留余量。
+  const stdoutCap = Math.ceil(maxBytes * 4 / 3) + 131072
   const handle = subprocess.spawn({
-    argv: ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-    cwd,
+    // 不传 -ExecutionPolicy Bypass：-EncodedCommand 不经过脚本文件执行策略，
+    // 保留 Bypass 只会让这条命令行更像恶意 PowerShell。
+    argv: ['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+    cwd: cwdOf(exec),
     stdio: {
       stdin: 'ignore',
-      stdout: { maxBytes: 65536 },
+      stdout: { maxBytes: stdoutCap },
       stderr: { maxBytes: 16384 },
     },
     graceMs: 2000,
@@ -621,18 +645,22 @@ async function observeScreenshot(deps, target, exec) {
     return { ok: false, detail: captureFailure(result).detail, shot: null }
   }
 
+  const payload = typeof result.data === 'string' ? result.data : ''
+  const data = Buffer.from(payload, 'base64')
+  if (data.length === 0) {
+    return { ok: false, detail: '截图脚本返回了空画面（base64 无法解码），不能当证据。', shot: null }
+  }
+  if (data.length > maxBytes) {
+    return {
+      ok: false,
+      detail: `截图有 ${data.length} 字节，超过 ${maxBytes} 字节上限，没有存进附件。`,
+      shot: null,
+    }
+  }
+
   let reference
   try {
-    const fileTarget = await fs.resolve(outPath, { cwd })
-    const data = await fs.readBytes(fileTarget, undefined, config.screenshotMaxBytes)
     reference = await attachments.saveImage({ data, mediaType: 'image/png', name })
-    if (config.screenshotKeepFiles !== true) {
-      try {
-        await fs.deleteFile(fileTarget)
-      } catch {
-        // 删不掉就留着，不影响证据；README 里写明了路径。
-      }
-    }
   } catch (error) {
     return {
       ok: false,
@@ -648,7 +676,6 @@ async function observeScreenshot(deps, target, exec) {
     ? `（原 ${result.sourceWidth}×${result.sourceHeight}，已缩放）`
     : ''
   const windowTitle = clip(result.title ?? '', 120)
-  const kept = config.screenshotKeepFiles === true ? `；文件留在 ${outPath}` : ''
   // v0.4.4：记下这张图是「窗口自渲染」还是「屏幕像素」，排查遮挡问题时这是关键信息。
   const method = result.method === 'printwindow' || result.method === 'screen' ? result.method : ''
   const how = method === 'printwindow' ? '（窗口自渲染，不受遮挡影响）'
@@ -657,10 +684,11 @@ async function observeScreenshot(deps, target, exec) {
   return {
     ok: true,
     detail: `窗口「${windowTitle}」（${result.process ?? '?'}，pid ${result.pid ?? '?'}）`
-      + `已截图 ${width}×${height}${resized}${how}；画面已存进附件 ${String(reference.attachmentId).slice(0, 12)}…${kept}`,
+      + `已截图 ${width}×${height}${resized}${how}；画面已存进附件 ${String(reference.attachmentId).slice(0, 12)}…`,
     shot: {
       id: String(reference.attachmentId),
-      path: outPath,
+      // v0.4.5 起不再有磁盘副本；path 留空，refersToSelfShot 只按 attachment id 匹配。
+      path: '',
       width,
       height,
       window: windowTitle,
@@ -676,7 +704,10 @@ export function createCheckTool(deps) {
   const { config, projection, ctx } = deps
   // v0.4.3：图片块不是 JSON，进不了工具返回值/schema；render 时按 shotId 从这里取。
   // 会话回放用的是日志里已存的块，不需要这张表，所以进程内丢了也没关系。
+  // v0.4.5：最多保留 16 张图的引用块。之前只增不删，长会话里会一直留着
+  // 每张截图对应的图片引用对象（不是像素，但也没必要无界增长）。
   const imageBlocks = new Map()
+  const IMAGE_BLOCKS_MAX = 16
 
   return defineTool({
     name: 'coach_check',
@@ -784,14 +815,15 @@ export function createCheckTool(deps) {
         )
       }
 
+      // v0.4.5：相位 / 步骤归属必须在**产生任何副作用之前**校验。
+      // 之前截图、跑命令、读文件都先执行，PAUSED / COMPLETE 阶段也会真的截屏。
+      const pre = preflightCheck(state, args.stepKey)
+
       let observation
       let image
       if (kind === 'screenshot') {
         // v0.4.3：按步预算——同一小步第 N+1 张在抓屏之前就拒绝（失败也计数）。
-        const stepKey = state.phase === 'INIT' || state.phase === 'CHECK_TOOL_AVAILABILITY'
-          ? 'env'
-          : currentStepKey(state)
-        const used = effectiveSinceBack(state, checksFor(state, stepKey))
+        const used = effectiveSinceBack(state, checksFor(state, pre.key))
           .filter((check) => check.kind === 'screenshot').length
         const limit = config.screenshotMaxPerStep
         if (used >= limit) {
@@ -825,7 +857,11 @@ export function createCheckTool(deps) {
         }
       }
 
-      const detail = clip(observation.detail)
+      // read_file 的回传上限由 readFileMaxChars 决定；默认的 600 字预算会把它砍掉一半。
+      const detail = clip(
+        observation.detail,
+        kind === 'read_file' ? config.readFileMaxChars + 128 : DETAIL_BUDGET,
+      )
       const shot = observation.shot ?? null
       const next = applyCheck(state, {
         stepKey: args.stepKey,
@@ -837,7 +873,12 @@ export function createCheckTool(deps) {
       }, 0)
 
       const shotId = shot === null ? undefined : shot.id
-      if (image !== undefined && shotId !== undefined) imageBlocks.set(shotId, image)
+      if (image !== undefined && shotId !== undefined) {
+        imageBlocks.set(shotId, image)
+        while (imageBlocks.size > IMAGE_BLOCKS_MAX) {
+          imageBlocks.delete(imageBlocks.keys().next().value)
+        }
+      }
 
       return {
         ok: observation.ok,
