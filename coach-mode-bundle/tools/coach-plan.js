@@ -8,6 +8,7 @@
 import { defineTool } from './define-tool.js'
 import {
   CHECK_KINDS,
+  CoachError,
   DIFFICULTIES,
   EVIDENCES,
   USER_LEVELS,
@@ -30,7 +31,7 @@ const DESCRIPTION = [
 ].join('')
 
 export function createPlanTool(deps) {
-  const { config, projection } = deps
+  const { config, projection, facts } = deps
   return defineTool({
     name: 'coach_plan',
     description: DESCRIPTION,
@@ -181,6 +182,32 @@ export function createPlanTool(deps) {
       const state = projection.stateForExec(exec)
       const exitedInstallBranch = isInstallBranch(state)
       const payload = normalizePlanInput(args, config, state)
+
+      // v0.4.5：screen 证据只有在「Windows + 截图开关打开」时才可能被满足。
+      // 计划一旦受理就不能改，所以必须在受理之前拦——否则会造出一个永远过不了的步骤，
+      // 用户只能靠 coach_skip 绕过去。
+      const screenSteps = payload.plan
+        .flatMap((section) => section.steps)
+        .filter((step) => step.evidence === 'screen')
+      if (screenSteps.length > 0) {
+        if (facts?.platform !== 'win32') {
+          throw new CoachError(
+            `本平台（${facts?.platform ?? '未知'}）不支持截图取证，但计划里有 ${screenSteps.length} 个步骤`
+              + '把 evidence 设成了 "screen"。计划一旦受理就不能改，所以现在拒绝。'
+              + '请把这些步骤的 evidence 改成 "user_artifact"（让用户发截图），再重新提交计划。',
+            'COACH_PLAN_PLATFORM_UNSUPPORTED',
+          )
+        }
+        if (config.screenshotEnabled !== true) {
+          throw new CoachError(
+            '计划里有步骤要求 "screen" 证据，但 Config.screenshotEnabled 是 false（截图默认关闭）。'
+              + '请把这些步骤的 evidence 改成 "user_artifact" 再提交；'
+              + '或者由用户把 screenshotEnabled 打开并重启后再走截图分支。',
+            'COACH_PLAN_SCREEN_DISABLED',
+          )
+        }
+      }
+
       const next = applyPlan(state, payload, 0)
       const totalSteps = payload.plan.reduce((count, section) => count + section.steps.length, 0)
       const accepted = next.planAcceptedAt !== null

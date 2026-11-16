@@ -24,8 +24,11 @@
  * `researchContentMaxChars` 截断；折叠结果变了，升到 9。
  * v0.4.3：新增 `screen` 证据与 `screenshot` 核查种类，`checks` 条目可带 `shot`；
  * 状态新增 `lastUserFeedbackAt`（截图必须晚于用户这次反馈才算数），升到 10。
+ * v0.4.5：新增 `userArtifacts`（用户消息里的附件 id）与 `userText`（用户原话），
+ * 用于 `user_artifact` 判「通过」时校验工质确实来自用户；折叠语义变了，升到 11。
+ * v0.5.0：新增 `notes`（学习记录预览/保存元数据），升到 12。
  */
-export const STATE_VERSION = 10
+export const STATE_VERSION = 12
 
 /** 11 个阶段的中文名（渲染与报错共用一个来源）。 */
 export const PHASE_LABELS = {
@@ -142,6 +145,14 @@ export function initialState() {
     // v0.4.3：最近一条真人用户消息的序号。`screen` 证据判「通过」时，
     // 截图必须晚于它——防止拿一张用户动手之前拍的旧截图当证据。
     lastUserFeedbackAt: null,
+    // v0.4.5：用户消息里出现过的附件 id（最多 20 条）与用户原话（最多 20000 字符）。
+    // `user_artifact` 判「通过」时，evidenceRef 必须命中其中之一——防止模型编一个
+    // 「用户提供了截图」的引用，实际上用户只说了句「好」。
+    userArtifacts: [],
+    userText: '',
+    // v0.5.0：coach_note 的元数据（只记预览/保存事实，不写文件）。
+    // 每条 `{ title, status: 'preview'|'saved', at, path?, images, bytes, redactions }`。
+    notes: [],
   }
 }
 

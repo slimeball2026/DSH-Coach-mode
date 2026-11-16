@@ -339,3 +339,107 @@ test('有信息的反馈不会累加失败次数', () => {
   assert.equal(state.plan[0].steps[0].failedAttempts, 0)
   assert.equal(state.pendingNoInfoAt, null)
 })
+
+// ── v0.4.5：带附件但没有文字的反馈不算零信息 ───────────────────────────────
+
+test('v0.4.5 只发截图（空文本 + hasMedia）不计失败，也不留待认领标记', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '', 11, { hasMedia: true })
+  assert.equal(state.plan[0].steps[0].failedAttempts, 0, '截图不是零信息')
+  assert.equal(state.pendingNoInfoAt, null)
+  assert.equal(state.lastUserFeedbackAt, 11, '截图仍要更新"用户最近一次反馈"')
+})
+
+test('v0.4.5 空文本且没有附件，仍然按零信息计一次', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '', 11)
+  assert.equal(state.plan[0].steps[0].failedAttempts, 1)
+  assert.equal(state.pendingNoInfoAt, 11)
+})
+
+test('v0.4.5 带附件但也写了「还是不行」：按文字判定，仍计一次', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '还是不行', 11, { hasMedia: true })
+  assert.equal(state.plan[0].steps[0].failedAttempts, 1)
+})
+
+// ── v0.4.5：失败的文件/命令核查不能判「通过」 ───────────────────────────────
+
+test('v0.4.5 evidence=file：最近一次核查失败时不能判「通过」', () => {
+  let state = planWith('file')
+  state = applyCheck(state, { kind: 'path_exists', target: 'C:/work/.git', ok: false, detail: '路径不存在' }, 11)
+  assert.throws(
+    () => applyVerify(state, { verdict: '通过', evidenceRef: 'C:/work/.git', reason: '用户说做完了' }, 12),
+    (error) => {
+      assert.equal(error.code, 'COACH_VERIFY_CHECK_FAILED')
+      assert.match(error.message, /失败的核查不能判「通过」/)
+      return true
+    },
+  )
+})
+
+test('v0.4.5 evidence=file：核查成功后可以判「通过」', () => {
+  let state = planWith('file')
+  state = applyCheck(state, { kind: 'path_exists', target: 'C:/work/.git', ok: true, detail: '存在（type file）' }, 11)
+  const next = applyVerify(state, { verdict: '通过', evidenceRef: 'C:/work/.git', reason: '存在 .git' }, 12)
+  assert.equal(next.phase, 'NEXT_STEP')
+})
+
+test('v0.4.5 evidence=command：非零退出不能判「通过」', () => {
+  let state = planWith('command')
+  state = applyCheck(state, { kind: 'command', target: 'git status', ok: false, detail: 'exit=128' }, 11)
+  assert.throws(
+    () => applyVerify(state, { verdict: '通过', evidenceRef: 'git status', reason: 'ok' }, 12),
+    (error) => error.code === 'COACH_VERIFY_CHECK_FAILED',
+  )
+})
+
+test('v0.4.5 先成功后失败：以最新一条为准，必须重新核查', () => {
+  let state = planWith('file')
+  state = applyCheck(state, { kind: 'path_exists', target: 'C:/work/.git', ok: true, detail: '存在' }, 11)
+  state = applyCheck(state, { kind: 'path_exists', target: 'C:/work/.git', ok: false, detail: '又被删了' }, 12)
+  assert.throws(
+    () => applyVerify(state, { verdict: '通过', evidenceRef: 'C:/work/.git', reason: '之前通过过' }, 13),
+    (error) => error.code === 'COACH_VERIFY_CHECK_FAILED',
+  )
+})
+
+// ── v0.4.5：user_artifact 的工质必须来自用户消息 ─────────────────────────────
+
+test('v0.4.5 user_artifact：引用用户附件 id 可以判通过', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '截图我发你了', 11, {
+    artifacts: [{ id: 'att-abc123', kind: 'image', at: 11 }],
+  })
+  const next = applyVerify(state, { verdict: '通过', evidenceRef: 'att-abc123', reason: '截图里能看到' }, 12)
+  assert.equal(next.phase, 'NEXT_STEP')
+})
+
+test('v0.4.5 user_artifact：引用用户原话里的路径可以判通过（斜杠归一化）', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '文件在 C:\\work\\shot.png，你看下', 11)
+  const next = applyVerify(state, { verdict: '通过', evidenceRef: 'C:/work/shot.png', reason: '路径对' }, 12)
+  assert.equal(next.phase, 'NEXT_STEP')
+})
+
+test('v0.4.5 user_artifact：编造的引用被拒', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '好', 11)
+  assert.throws(
+    () => applyVerify(state, { verdict: '通过', evidenceRef: '用户提供了截图', reason: '用户说做完了' }, 12),
+    (error) => {
+      assert.equal(error.code, 'COACH_VERIFY_USER_ARTIFACT')
+      assert.match(error.message, /找不到对应工质/)
+      return true
+    },
+  )
+})
+
+test('v0.4.5 user_artifact：过短的引用（<4 字符）不算工质', () => {
+  let state = planWith('user_artifact')
+  state = applyUserFeedback(state, '好', 11)
+  assert.throws(
+    () => applyVerify(state, { verdict: '通过', evidenceRef: '好', reason: '用户说好' }, 12),
+    (error) => error.code === 'COACH_VERIFY_USER_ARTIFACT',
+  )
+})
